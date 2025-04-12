@@ -1,0 +1,857 @@
+{
+    "Common_Lines": {
+        "AryoTrust": [1,3,4],
+        "Zytux": [3],
+        "Altebrel": [1,2,3,5],
+        "Stivant": [1,4,6],
+        "Arylia": [2,4,5],
+        "AryoSeven_BR": [2],
+        "Coageight": [2],
+        "Aryoseven_RC": [0]
+    },
+    "Altebrel": [
+        {
+            "Protein_per_1000L_BR": 800,
+            "Cell_Thawing & SF": 13,
+            "Harvest": 1,
+            "Hold": "Yes"
+        },
+        {
+            "lines": [   
+                {
+                    "id": 1,
+                    "BRs": {
+                        "10": 4,
+                        "100": 4,
+                        "500": 4,
+                        "2000-1": 16
+                    },
+                    "Overlaps": {
+                        "10 & 100": 1,
+                        "500 & 100": 1,
+                        "500 & 2000-1": 1
+                    },
+                    "N_Harvest": 1,
+                    "Hold": 1,
+                    "Mabs": {
+                        "After 2000-1": 4
+                    },
+                    "Follow_Up_2000-1": {
+                        "2000-1_Mab_QC_Test": 2,
+                        "MMC": 1,
+                        "CMMC": 1,
+                        "CMMC_QC_Test": 1,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 3,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-1_SameStarts": {
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_2000-1_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 2,
+                    "BRs": {
+                        "10": 4,
+                        "50": 4,
+                        "250": 19,
+                        "1000": 16
+                    },
+                    "Overlaps": {
+                        "250 & 1000": "Full",
+                        "50 & 10": 1,
+                        "50 & 250": 1
+                    },
+                    "N_Harvest": 1,
+                    "Hold": 1,
+                    "Mabs": {
+                        "After 1000": 4
+                    },
+                    "Follow_Up_1000": {
+                        "1000_Mab_QC_Test": 2,
+                        "MMC": 1,
+                        "CMMC": 1,
+                        "CMMC_QC_Test": 1,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_1000_SameStarts": {
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_1000_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 3,
+                    "BRs": {
+                        "25": 4,
+                        "125": 4,
+                        "750": 7,
+                        "2000-3": 16,
+                        "4500": 16
+                    },
+                    "Overlaps": {
+                        "750 & 2000-3": 4,
+                        "2000-3 & 4500": 13,
+                        "25 & 125": 1,
+                        "125 & 750": 1
+                    },
+                    "N_Harvest": 2,
+                    "Hold": 1,
+                    "Mabs": {
+                        "After 2000-3": 2,
+                        "After 4500": 5
+                    },
+                    "Follow_Up_2000-3": {
+                        "2000-3_Mab_QC_Test": 1,
+                        "MMC": 1,
+                        "CMMC": 1,
+                        "CMMC_QC_Test": 1,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 3,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 10
+                    },
+                    "Follow_Up_2000-3_SameStarts": "None",
+                    "Follow_Up_2000-3_Overlaps": "None",
+                    "Follow_Up_4500": {
+                        "4500_Mab_QC_Test": 1,
+                        "MMC": 1,
+                        "CMMC": 1,
+                        "CMMC_QC_Test": 1,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX 4 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 4,
+                        "DS_Preparation": 2,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 5,
+                        "Labeling": 8,
+                        "Packaging": 10,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_4500_SameStarts": {
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_4500_Overlaps": {
+                        "Visual Insp. & Labeling": 3,
+                        "Labeling & Packaging": 6
+                    },
+                    "status": "active"
+                }
+        ]}
+    ],
+    "AryoSeven_RC": [
+        {
+            "Protein_Per_Each_Run": 3.3,
+            "Cell_Thawing & SF": 1
+        },
+        {
+            "lines": [   
+                {
+                    "id": 0,
+                    "TFs": {
+                        "75": 4,
+                        "175": 3,
+                        "Incubator 14 Rollers": 4,
+                        "Incubator 84 Rollers": 4,
+                        "Incubator 1008 Rollers": 26
+                    },
+                    "Overlaps": {
+                        "75 & 175": 1,
+                        "175 & Incubator 14 Rollers": 1,
+                        "Incubator 14 Rollers & Incubator 84 Rollers": 1,
+                        "Incubator 84 Rollers & Incubator 1008 Rollers": 1
+                    },
+                    "SS's_during_Incubator_1008_Rollers":{
+                        "SS 1": 11,
+                        "SS 2": 14,
+                        "SS 3": 16,
+                        "SS 4": 18,
+                        "SS 5": 20,
+                        "SS 6": 21,
+                        "SS 7": 22,
+                        "SS 8": 23,
+                        "SS 9": 24,
+                        "SS 10": 25,
+                        "SS 11": 26
+                    },
+                    "Q/SE_during_Incubator_1008_Rollers":{
+                        "Q/SE 1": 20,
+                        "Q/SE 2": 25
+                    },
+                    "Follow_Up": {
+                        "Break & Hold": 3,
+                        "Q/SE 3": 1,
+                        "Q/SE 4": 1,
+                        "Q/SE 5": 1,
+                        "Q/SE_QC_Test": 1,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 6,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Lyophilization": 3,
+                        "Capping": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_SameStarts": {
+                        "Filling & Lyophilization": 1,
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_Overlaps": {
+                        "Lyophilization & Capping": "Full"
+                    },
+                    "status": "active"
+                }
+            ]
+        }
+    ],
+    "AryoSeven_BR": [
+        {
+            "Protein_per_1000L_BR": 20,
+            "Cell_Thawing & SF": 13,
+            "Harvest": 1,
+            "Hold":0
+        },
+        {
+            "lines": [
+                {
+                    "id": 2,
+                    "BRs": {
+                        "10": 4,
+                        "50": 4,
+                        "250": 19,
+                        "1000": 16
+                    },
+                    "Overlaps": {
+                        "250 & 1000": "Full",
+                        "50 & 10": 1,
+                        "50 & 250": 1
+                    },
+                    "N_Harvest": 1,
+                    "SS's": {
+                        "After 1000": 6
+                    },
+                    "Follow_Up_1000": {
+                        "1000_SS_QC_Test": 2,
+                        "Q/SE 1 ": 1,
+                        "Q/SE 2 ": 1,
+                        "Q/SE 3 ": 1,
+                        "Q/SE 4 ": 1,
+                        "Q/SE 5 ": 1,
+                        "Q/SE 6 ": 1,
+                        "Q/SE_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 6,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Lyophilization": 3,
+                        "Capping": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_1000_SameStarts": {
+                        "Filling & Lyophilization": 1,
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_1000_Overlaps": {
+                        "Lyophilization & Capping": "Full"
+                    },
+                    "status": "active"
+                }
+            ]
+        }
+    ],
+    "Stivant": [
+        {
+            "Protein_per_1000L_BR": 1300,
+            "Cell_Thawing & SF": 13,
+            "Harvest": 1,
+            "Hold": "No"
+        },
+        {
+            "lines": [
+                {
+                    "id": 1,
+                    "BRs": {
+                        "10": 4,
+                        "100": 4,
+                        "500": 7,
+                        "2000-1": 16,
+                        "2000-2": 16
+                    },
+                    "Overlaps": {
+                        "500 & 2000-1": 4,
+                        "2000-1 & 2000-2": 13,
+                        "10 & 100": 1,
+                        "100 & 500": 1
+                    },
+                    "N_Harvest": 2,
+                    "Mabs": {
+                        "After 2000-1": 3,
+                        "After 2000-2": 3
+                    },
+                    "Follow_Up_2000-1": {
+                        "2000-1_Mab_QC_Test": 2,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 13,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-1_SameStarts": {
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_2000-1_Overlaps": "None",
+                    "Follow_Up_2000-2": {
+                        "2000-2_Mab_QC_Test": 2,
+                        "CEX 4 ": 1,
+                        "CEX 5 ": 1,
+                        "CEX 6 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1
+                    },
+                    "Follow_Up_2000-2_SameStarts": "None",
+                    "Follow_Up_2000-2_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 6,
+                    "BRs": {
+                        "10": 4,
+                        "100": 4,
+                        "500": 7,
+                        "2000-6": 16,
+                        "2000-7": 16
+                    },
+                    "Overlaps": {
+                        "500 & 2000-6": 4,
+                        "2000-6 & 2000-7": 13,
+                        "10 & 100": 1,
+                        "100 & 500": 1
+                    },
+                    "N_Harvest": 2,
+                    "Mabs": {
+                        "After 2000-6": 3,
+                        "After 2000-7": 3
+                    },
+                    "Follow_Up_2000-6": {
+                        "2000-6_Mab_QC_Test": 2,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 13,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-6_SameStarts": {
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_2000-6_Overlaps": "None",
+                    "Follow_Up_2000-7": {
+                        "2000-7_Mab_QC_Test": 2,
+                        "CEX 4 ": 1,
+                        "CEX 5 ": 1,
+                        "CEX 6 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1
+                    },
+                    "Follow_Up_2000-7_SameStarts": "None",
+                    "Follow_Up_2000-7_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 4,
+                    "BRs": {
+                        "25": 4,
+                        "100": 4,
+                        "500": 4,
+                        "1000": 16,
+                        "2000-4": 16
+                    },
+                    "Overlaps": {
+                        "25 & 100": 1,
+                        "100 & 500": 1,
+                        "500 & 1000": 1,
+                        "1000 & 2000-4": "Full"
+                    },
+                    "N_Harvest": 1,
+                    "Mabs": {
+                        "After 2000-4": 5
+                    },
+                    "Follow_Up_2000-4": {
+                        "2000-4_Mab_QC_Test": 2,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX 4 ": 1,
+                        "CEX 5 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 3,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 13,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-4_SameStarts": {
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_2000-4_Overlaps": "None",
+                    "status": "active"
+                }
+            ]
+        }
+    ],
+    "AryoTrust": [
+        {
+            "Protein_per_1000L_BR": 1400,
+            "Cell_Thawing & SF": 13,
+            "Harvest": 1,
+            "Hold": 0
+        },
+        {
+            "lines": [
+                {
+                    "id": 1,
+                    "BRs": {
+                        "10": 4,
+                        "100": 4,
+                        "500": 7,
+                        "2000-1": 16,
+                        "2000-2": 16
+                    },
+                    "Overlaps": {
+                        "500 & 2000-1": 4,
+                        "2000-1 & 2000-2": 13,
+                        "10 & 100": 1,
+                        "100 & 500": 1
+                    },
+                    "N_Harvest": 2,
+                    "Mabs": {
+                        "After 2000-1": 3,
+                        "After 2000-2": 3
+                    },
+                    "Follow_Up_2000-1": {
+                        "2000-1_Mab_QC_Test": 2,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 13,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Lyophilization": 4,
+                        "Capping": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-1_SameStarts": {
+                        "Filling & Lyophilization": 1,
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_2000-1_Overlaps": {
+                        "Lyophilization & Capping": "Full"
+                    },
+                    "Follow_Up_2000-2": {
+                        "2000-2_Mab_QC_Test": 2,
+                        "CEX 4 ": 1,
+                        "CEX 5 ": 1,
+                        "CEX 6 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1
+                    },
+                    "Follow_Up_2000-2_SameStarts": "None",
+                    "Follow_Up_2000-2_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 3,
+                    "BRs": {
+                        "25": 4,
+                        "125": 4,
+                        "750": 7,
+                        "2000-3": 16,
+                        "4500": 16
+                    },
+                    "Overlaps": {
+                        "750 & 2000-3": 4,
+                        "2000-3 & 4500": 13,
+                        "25 & 125": 1,
+                        "125 & 750": 1
+                    },
+                    "N_Harvest": 2,
+                    "Mabs": {
+                        "After 2000-3": 3,
+                        "After 4500": 4
+                    },
+                    "Follow_Up_2000-3": {
+                        "2000-3_Mab_QC_Test": 2,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 13,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Lyophilization": 4,
+                        "Capping": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-3_SameStarts": {
+                        "Filling & Lyophilization": 1,
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_2000-3_Overlaps": {
+                        "Lyophilization & Capping": "Full"
+                    },
+                    "Follow_Up_4500": {
+                        "4500_Mab_QC_Test": 2,
+                        "CEX 4 ": 1,
+                        "CEX 5 ": 1,
+                        "CEX 6 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1
+                    },
+                    "Follow_Up_4500_SameStarts": "None",
+                    "Follow_Up_4500_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 4,
+                    "BRs": {
+                        "25": 4,
+                        "100": 4,
+                        "500": 4,
+                        "1000": 16,
+                        "2000-4": 16
+                    },
+                    "Overlaps": {
+                        "25 & 100": 1,
+                        "100 & 500": 1,
+                        "500 & 1000": 1,
+                        "1000 & 2000-4": "Full"
+                    },
+                    "N_Harvest": 1,
+                    "Mabs": {
+                        "After 2000-4": 5
+                    },
+                    "Follow_Up_2000-4": {
+                        "2000-4_Mab_QC_Test": 2,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX 4 ": 1,
+                        "CEX 5 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 3,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 13,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Lyophilization": 4,
+                        "Capping": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-4_SameStarts": {
+                        "Filling & Lyophilization": 1,
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_2000-4_Overlaps": {
+                        "Lyophilization & Capping": "Full"
+                    },
+                    "status": "active"
+                }
+            ]
+        }
+    ],
+    "Zytux": [
+        {
+            "Protein_per_1000L_BR": 2200,
+            "Cell_Thawing & SF": 10,
+            "Harvest": 1,
+            "Hold": 0
+        },
+        {
+            "lines": [
+                {
+                    "id": 3,
+                    "BRs": {
+                        "25": 4,
+                        "125": 4,
+                        "750": 7,
+                        "2000-3": 16,
+                        "4500": 16
+                    },
+                    "Overlaps": {
+                        "750 & 2000-3": 4,
+                        "2000-3 & 4500": 13,
+                        "25 & 125": 1,
+                        "125 & 750": 1
+                    },
+                    "N_Harvest": 2,
+                    "Mabs": {
+                        "After 2000-3": 3,
+                        "After 4500": 6
+                    },
+                    "Follow_Up_2000-3": {
+                        "2000-3_Mab_QC_Test": 2,
+                        "CEX 1 ": 1,
+                        "CEX 2 ": 1,
+                        "CEX 3 ": 1,
+                        "CEX_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 2,
+                        "DS_QC_Test": 10
+                    },
+                    "Follow_Up_2000-3_SameStarts": "None",
+                    "Follow_Up_2000-3_Overlaps": "None",
+                    "Follow_Up_4500": {
+                        "4500_Mab_QC_Test": 2,
+                        "CEX 4 ": 1,
+                        "CEX 5 ": 1,
+                        "CEX 6 ": 1,
+                        "CEX 7 ": 1,
+                        "CEX 8 ": 1,
+                        "CEX 6_QC_Test": 1,
+                        "CEX 8_QC_Test": 1,
+                        "Nano_Filteration_after_CEX 6_QC_Test": 2,
+                        "DS_Preparation_after_CEX 6_Nano_Filteration": 2,
+                        "Nano_Filteration_after_CEX 8_QC_Test": 2,
+                        "DS_Preparation_after_CEX 8_Nano_Filteration": 2,
+                        "DS_QC_Test_after_CEX 8_DS_Preparation": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_4500_SameStarts": {
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_4500_Overlaps": "None",
+                    "status": "active"
+                }
+            ]
+        }
+    ],
+    "Arylia": [
+        {
+            "Protein_per_1000L_BR": 750,
+            "Cell_Thawing & SF": 13,
+            "Harvest": 1,
+            "Hold":0
+        },
+        {
+            "lines": [
+                {
+                    "id": 2,
+                    "BRs": {
+                        "10": 4,
+                        "50": 4,
+                        "250": 19,
+                        "1000": 16
+                    },
+                    "Overlaps": {
+                        "250 & 1000": "Full",
+                        "50 & 10": 1,
+                        "50 & 250": 1
+                    },
+                    "N_Harvest": 1,
+                    "Mabs": {
+                        "After 1000": 2
+                    },
+                    "Follow_Up_1000": {
+                        "1000_Mab_QC_Test": 2,
+                        "HIC 1 ": 1,
+                        "HIC 2 ": 1,
+                        "HIC 3 ": 1,
+                        "HIC 4 ": 1,
+                        "HIC_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_1000_SameStarts": "None",
+                    "Follow_Up_1000_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 5,
+                    "BRs": {
+                        "10": 4,
+                        "100": 4,
+                        "500": 4,
+                        "2000-5": 16
+                    },
+                    "Overlaps": {
+                        "10 & 100": 1,
+                        "100 & 500": 1,
+                        "500 & 2000-5": 1
+                    },
+                    "N_Harvest": 1,
+                    "Mabs": {
+                        "After 2000-5": 2
+                    },
+                    "Follow_Up_2000-5": {
+                        "2000-5_Mab_QC_Test": 2,
+                        "HIC 1 ": 1,
+                        "HIC 2 ": 1,
+                        "HIC 3 ": 1,
+                        "HIC 4 ": 1,
+                        "HIC_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-5_SameStarts": "None",
+                    "Follow_Up_2000-5_Overlaps": "None",
+                    "status": "active"
+                },
+                {
+                    "id": 4,
+                    "BRs": {
+                        "10": 4,
+                        "100": 4,
+                        "500": 4,
+                        "1000": 16,
+                        "2000-4": 16
+                    },
+                    "Overlaps": {
+                        "1000 & 2000-4": "Full",
+                        "10 & 100": 1,
+                        "100 & 500": 1,
+                        "500 & 1000": 1
+                    },
+                    "N_Harvest": 1,
+                    "Mabs": {
+                        "After 2000-4": 4
+                    },
+                    "Follow_Up_2000-4": {
+                        "2000-4_Mab_QC_Test": 2,
+                        "HIC 1 ": 1,
+                        "HIC 2 ": 1,
+                        "HIC 3 ": 1,
+                        "HIC 4 ": 1,
+                        "HIC 5 ": 1,
+                        "HIC 6 ": 1,
+                        "HIC 7 ": 1,
+                        "HIC 8 ": 1,
+                        "HIC 9 ": 1,
+                        "HIC 10 ": 1,
+                        "HIC 11 ": 1,
+                        "HIC_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 2,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-4_SameStarts": "None",
+                    "Follow_Up_2000-4_Overlaps": "None",
+                    "status": "active"
+                }
+            ]
+        }
+    ]
+    
+}

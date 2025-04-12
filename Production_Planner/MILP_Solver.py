@@ -1,0 +1,1963 @@
+import json
+import math
+import uuid
+from collections import deque
+from datetime import date, datetime, timedelta
+from ortools.sat.python import cp_model
+
+SHELF_LIFE = 24  # Shelf life in months
+DAYS_PER_MONTH = 30
+TOTAL_MONTHS = None
+BASE_DATE_FOR_PLANNING = None
+MAX_RUNS = 200  # Maximum number of production runs per product
+
+
+def set_total_months(new_month_count: int):
+    """
+    Sets the global TOTAL_MONTHS based on the user input in main().
+    """
+    global TOTAL_MONTHS
+    TOTAL_MONTHS = new_month_count
+
+
+def parse_base_date(date_str: str) -> date:
+    """
+    Convert an ISO-like string (e.g. 2025-04-01T20:30:00.000Z) into a Python date object.
+    """
+    # Example parsing using datetime.strptime for the format including 'Z'
+    # Adjust if your format is slightly different.
+    dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+    return dt.date()
+
+
+# --- NEW GLOBAL VARIABLE ---
+
+
+def set_base_date_for_planning(new_date: date):
+    global BASE_DATE_FOR_PLANNING
+    BASE_DATE_FOR_PLANNING = new_date
+
+
+def day_to_date(day_offset: int) -> str:
+    """
+    Convert a day offset to an ISO formatted date string, based on the global
+    BASE_DATE_FOR_PLANNING instead of a fixed 2026-01-01.
+    """
+    global BASE_DATE_FOR_PLANNING
+    if BASE_DATE_FOR_PLANNING is None:
+        # fallback if not set, or raise an error
+        raise ValueError(
+            "BASE_DATE_FOR_PLANNING is not set. Call set_base_date_for_planning() first."
+        )
+
+    actual_date = BASE_DATE_FOR_PLANNING + timedelta(days=day_offset)
+    return actual_date.isoformat()
+
+
+def parse_volume(br_name: str) -> float:
+    """
+    Parses the volume from a batch record name.
+
+    The function extracts the leading numeric characters from the batch record name,
+    which are assumed to represent the volume. The batch record name is expected to
+    have the format where the volume is the first part of the string, separated by a
+    hyphen.
+
+    Args:
+        br_name (str): The batch record name from which to extract the volume.
+
+    Returns:
+        float: The extracted volume as a float. Returns 0.0 if no numeric characters
+               are found at the beginning of the batch record name.
+
+    """
+    chunk = br_name.split("-")[0]
+    digits = ""
+    for ch in chunk:
+        if ch.isdigit():
+            digits += ch
+        else:
+            break
+    return float(digits) if digits else 0.0
+
+
+def assign_batch_codes(final_plan):
+    """
+    Attach a unique batch code to each production run in final_plan.
+    Returns a dict mapping products to a list of batches.
+    Each batch is a dict with keys: 'code', 'prod_month', 'release_date', 'quantity'
+    """
+    batches = {}
+    for run in final_plan:
+        prod = run["product"]
+        # Only consider runs that produced something (or that have a production month)
+        if run["production_month"] is None:
+            continue
+        qty = run["produced_protein"]
+        month = run["production_month"]
+        release_date = run[
+            "release_day"
+        ]  # Assuming this value exists in your input data
+        batch_code = str(uuid.uuid4())
+        batch = {
+            "code": batch_code,
+            "prod_month": month,
+            "release_date": release_date,
+            "quantity": qty,
+        }
+        batches.setdefault(prod, []).append(batch)
+    return batches
+
+
+def simulate_inventory_batches(batches, demand):
+    """
+    For each product, simulate FIFO inventory consumption with batch expiration.
+    Returns two dictionaries:
+        - inventory_by_month: available quantity per product per month
+        - batch_details: detailed info (including expired amounts) per product per month.
+    """
+    # Initialize report dictionaries.
+    inventory_by_month = {}
+    batch_details = {}
+    # Process each product individually.
+    for prod, batch_list in batches.items():
+        # Sort batches by production month (FIFO)
+        batch_queue = deque(sorted(batch_list, key=lambda b: b["prod_month"]))
+        inventory_by_month[prod] = {}
+        batch_details[prod] = {}
+        current_inventory = 0.0
+        # For each month from 1 to TOTAL_MONTHS:
+        for m in range(1, TOTAL_MONTHS + 1):
+            # Calculate the current simulation month date
+            current_simulation_date = date(2026, 1, 1) + timedelta(
+                days=30 * (m - 1)
+            )  # m-1 because month 1 is 0 days away from start
+
+            # First, remove expired batches based on release date
+            expired_total = 0.0
+            while batch_queue:
+                batch = batch_queue[0]
+
+                # Ensure release_date is a datetime.date object
+                release_date = batch["release_date"]
+
+                # Case 1: release_date is an integer (day offset)
+                if isinstance(release_date, int):
+                    release_date = date(2026, 1, 1) + timedelta(days=release_date)
+
+                # Case 2: release_date is a string (date in YYYY-MM-DD format)
+                elif isinstance(release_date, str):
+                    release_date = datetime.strptime(release_date, "%Y-%m-%d").date()
+
+                # Case 3: release_date is already a datetime.date object
+                elif isinstance(release_date, datetime.date):
+                    pass  # it's already a date, nothing to do
+
+                else:
+                    raise ValueError(
+                        f"Unsupported release_date format: {type(release_date)}"
+                    )
+
+                # Calculate expiration date
+                expiration_date = release_date + timedelta(
+                    days=SHELF_LIFE * DAYS_PER_MONTH
+                )
+
+                if expiration_date <= current_simulation_date:
+                    expired_total += batch["quantity"]
+                    batch_queue.popleft()  # Remove expired batch
+                else:
+                    break
+
+            # Add production from batches produced in current month (if any).
+            # Calculate available inventory from nonexpired batches.
+            available = sum(b["quantity"] for b in batch_queue)
+            # Now, apply demand consumption in FIFO order.
+            demand_m = demand.get(prod, {}).get(m, 0)
+            remaining_demand = demand_m
+            for b in list(batch_queue):
+                if remaining_demand <= 0:
+                    break
+                if b["quantity"] <= remaining_demand:
+                    remaining_demand -= b["quantity"]
+                    b["quantity"] = 0
+                    batch_queue.popleft()  # Batch fully consumed
+                else:
+                    b["quantity"] -= remaining_demand
+                    remaining_demand = 0
+            available_after = sum(
+                b["quantity"] for b in batch_queue if b["prod_month"] <= m
+            )
+
+            # Save monthly inventory data.
+            inventory_by_month[prod][m] = available_after
+            batch_details[prod][m] = {
+                "demand": demand_m,
+                "expired": expired_total,
+                "available": available_after,
+                "batches": list(batch_queue),  # snapshot of current batches
+            }
+    return inventory_by_month, batch_details
+
+
+def print_batch_inventory_report(batch_details):
+    """
+    Print the Batch-based Inventory Report in a clearer format, showing the demand, expired, and available products
+    in a structured way, with detailed batch information for each product.
+    """
+    print("\n=== Batch-based Inventory Report ===")
+
+    for prod, month_data in batch_details.items():
+        print(f"Product={prod}:")
+
+        for m in range(1, TOTAL_MONTHS + 1):
+            details = month_data.get(m, {})
+            demand_m = details.get("demand", 0)
+            expired_total = details.get("expired", 0)
+            available = details.get("available", 0)
+            batches = details.get("batches", [])
+
+            # Start with basic information about the month
+            print(f" Month {m}:")
+            print(
+                f"   Demand = {demand_m:10.2f}, Expired = {expired_total:10.2f}, Available = {available:10.2f}"
+            )
+
+            # If there are batches, show their details
+            if batches:
+                for b in batches:
+                    batch_code = b["code"][
+                        :8
+                    ]  # Display the first 8 characters of the batch code
+                    prod_month = b["prod_month"]
+                    batch_qty = b["quantity"]
+                    print(
+                        f"    Batch {batch_code}..., Prod Month = {prod_month}, Remaining Qty = {batch_qty:10.2f}"
+                    )
+            else:
+                print("    No batches available for this month.")
+            print("-" * 50)  # Separator for better readability
+
+
+# --- NEW CODE: A specialized planner for AryoSeven_RC ---
+def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
+    """
+    A separate planner that handles AryoSeven_RC production,
+    because it uses 'TFs' instead of 'BRs', and yields a fixed 3.3 grams per run
+    instead of a volume-based approach.
+
+    Returns:
+       final_plan_RC: a list of dictionaries describing the runs and stages
+       inv_traj_RC: inventory trajectory for AryoSeven_RC
+
+    """
+    # We'll assume line 0 is active for AryoSeven_RC if "status" == "active".
+    # Quick checks:
+    if "AryoSeven_RC" not in demand:
+        print("No AryoSeven_RC demand. Skipping specialized RC planner.")
+        return [], {}
+
+    rc_conf_list = data.get("AryoSeven_RC")  # e.g. [base_conf, {lines: [...]}]
+    if not rc_conf_list or len(rc_conf_list) < 2:
+        print("Incomplete config for AryoSeven_RC in Lines.json.")
+        return [], {}
+
+    base_conf_rc = rc_conf_list[0]
+    lines_conf_rc = rc_conf_list[1]
+    line_list_rc = lines_conf_rc.get("lines", [])
+    active_line0_conf = None
+    for li in line_list_rc:
+        if li.get("id") == 0 and li.get("status") == "active":
+            active_line0_conf = li
+            break
+
+    if not active_line0_conf:
+        print("No active line 0 found for AryoSeven_RC. Can't schedule.")
+        return [], {}
+
+    # 1) Build a minimal CP-SAT or some simpler approach.
+    model = cp_model.CpModel()
+    # For simplicity, let's define a small number of runs. Adjust as needed:
+    MAX_RUNS_RC = 100
+    bigM = 10_000_000
+
+    # We'll assume each run can produce 3.3 grams. We'll create boolean variables:
+    use_run = {}
+    finish_time = {}
+    for r in range(MAX_RUNS_RC):
+        use_run[r] = model.NewBoolVar(f"run_aryoSevenRC_{r}")
+        finish_time[r] = model.NewIntVar(0, bigM, f"fin_aryoSevenRC_{r}")
+
+    # We won't fully define all parallel stage logic here, but let's outline a notion:
+    # Suppose each run takes a fixed total time = sum of all TF durations + some optional overlaps.
+    # We'll gather durations from active_line0_conf["TFs"].
+    tfs_map = active_line0_conf["TFs"]  # e.g. { "75":4, "175":3, ... }
+    # We can define a rough total time for each run:
+    total_tf_time = sum(tfs_map.values())  # ignoring overlaps for brevity
+    # Additionally, 1 day for "Cell_Thawing & SF"
+    cell_thaw_time = base_conf_rc.get("Cell_Thawing & SF", 1)
+    # So each run might take cell_thaw_time + total_tf_time days:
+    run_duration = cell_thaw_time + total_tf_time
+
+    # We'll create a chain of runs with no overlap, for example:
+    # (In real code, you might do more constraints to handle parallel runs or resource usage.)
+    prev_end = model.NewIntVar(0, bigM, "prev_end_init")
+    model.Add(prev_end == 0)  # Start at day 0
+    for r in range(MAX_RUNS_RC):
+        st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r}")
+        en = finish_time[r]
+        # If run is used => st >= prev_end
+        model.Add(st >= prev_end).OnlyEnforceIf(use_run[r])
+        # If run is not used => st = 0, en = 0
+        model.Add(st == 0).OnlyEnforceIf(use_run[r].Not())
+        model.Add(en == st + run_duration - 1).OnlyEnforceIf(use_run[r])
+
+        # Link prev_end for the next run:
+        if r < MAX_RUNS_RC - 1:
+            next_st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r + 1}")
+            model.Add(prev_end == en + 1).OnlyEnforceIf(use_run[r])
+            # If run[r] is not used, we keep prev_end the same. So let's do something like:
+            tmp = model.NewIntVar(0, bigM, f"tmp_{r}")
+            model.Add(tmp == prev_end).OnlyEnforceIf(use_run[r].Not())
+            # But to keep it simple, we skip advanced logic here.
+
+    # 2) Demand constraints, usage variables, etc.
+    # For each run => produces 3.3 grams => partial usage across months, expiration, ...
+    # We'll define usage[(r, m)], isValid[(r, m)], etc. just like your scenario B approach.
+    usage = {}
+    isValid = {}
+    expiration_date = {}
+    SHELF_LIFE_RC = 24  # months
+    # We map run -> produce_protein = 3.3 * use_run[r]
+    produced_protein_run = {}
+    for r in range(MAX_RUNS_RC):
+        # If run is active => produce 3.3
+        # We'll create an IntVar for produced_protein_run. We'll store it as integer scaled by 100 for example if needed
+        # For simplicity let's store as an IntVar with an upper bound 4 to store ceil(3.3).
+        produced_protein_run[r] = model.NewIntVar(0, 4, f"protein_run_{r}")
+        # enforce produced_protein_run[r] = 3.3 if run is used, else 0
+        # We'll do approximate integer approach:
+        # 3.3 -> we store as 3.  If you want a real approach, you'd use intervals or linear approx.
+        # For a quick approach:
+        model.Add(produced_protein_run[r] == 3).OnlyEnforceIf(use_run[r])
+        model.Add(produced_protein_run[r] == 0).OnlyEnforceIf(use_run[r].Not())
+
+        # expiration day => finish_time[r] + SHELF_LIFE_RC * 30
+        expiration_date[r] = model.NewIntVar(0, bigM, f"exp_run_{r}")
+        model.Add(expiration_date[r] == finish_time[r] + SHELF_LIFE_RC * 30)
+
+        for m in range(1, TOTAL_MONTHS + 1):
+            usage[(r, m)] = model.NewIntVar(0, bigM, f"usage_{r}_{m}")
+            isValid[(r, m)] = model.NewBoolVar(f"isValid_{r}_{m}")
+
+    # Sum usage <= produced
+    for r in range(MAX_RUNS_RC):
+        model.Add(
+            sum(usage[(r, m)] for m in range(1, TOTAL_MONTHS + 1))
+            <= produced_protein_run[r]
+        )
+
+    # Demand coverage
+    # demand["AryoSeven_RC"][m] might exist
+    for m in range(1, TOTAL_MONTHS + 1):
+        dem_m = int(math.ceil(demand["AryoSeven_RC"].get(m, 0)))
+        model.Add(sum(usage[(r, m)] for r in range(MAX_RUNS_RC)) >= dem_m)
+
+    # isValid => run finishes by month end, not expired at month start
+    # same approach as your scenario B
+    for r in range(MAX_RUNS_RC):
+        F = finish_time[r]
+        E = expiration_date[r]
+        for m in range(1, TOTAL_MONTHS + 1):
+            valid = isValid[(r, m)]
+            month_end = m * 30
+            month_start = (m - 1) * 30
+            model.Add(F <= month_end).OnlyEnforceIf(valid)
+            model.Add(E > month_start).OnlyEnforceIf(valid)
+            # usage zero if not valid
+            model.Add(usage[(r, m)] <= bigM * valid)
+
+    # Minimization: keep it consistent with your logic, or simpler
+    # e.g. minimize max finish_time plus sum of active runs
+    max_finish = model.NewIntVar(0, bigM, "max_finish_rc")
+    model.AddMaxEquality(max_finish, [finish_time[r] for r in range(MAX_RUNS_RC)])
+    total_runs = model.NewIntVar(0, MAX_RUNS_RC, "total_runs")
+    model.Add(total_runs == sum(use_run[r] for r in range(MAX_RUNS_RC)))
+
+    # Some objective: minimize max_finish + 1000*total_runs
+    model.Minimize(max_finish + 1000 * total_runs)
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 100.0
+    solver.parameters.num_search_workers = 2
+    status = solver.Solve(model)
+    if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        print("No feasible solution for AryoSeven_RC.")
+        return [], {}
+
+    # Build final_plan_RC
+    final_plan_RC = []
+    for r in range(MAX_RUNS_RC):
+        if solver.Value(use_run[r]) == 0:
+            continue
+        fday = solver.Value(finish_time[r])
+        expd = solver.Value(expiration_date[r])
+        monthly_usage_rc = {}
+        for m in range(1, TOTAL_MONTHS + 1):
+            val = solver.Value(usage[(r, m)])
+            if val > 0:
+                monthly_usage_rc[m] = val
+        final_plan_RC.append(
+            {
+                "product": "AryoSeven_RC",
+                "run_index": r,
+                "line_used": 0,
+                "finish_day": fday,
+                "finish_date": day_to_date(fday),
+                "monthly_usage": monthly_usage_rc,
+                "liters": 0.0,  # not relevant
+                "production_month": None,
+                # produce_protein = 3 if used, or partial usage
+                "produced_protein": float(solver.Value(produced_protein_run[r])),
+                "br_stages": [],  # or "tf_stages" if you want to add them
+                "release_day": fday,
+                "expiration_date": expd,
+                "expiration_date_str": day_to_date(expd),
+            }
+        )
+
+    # Build inventory from usage
+    inv_traj_RC: dict[str, dict[int, int]] = {}
+    inv_traj_RC["AryoSeven_RC"] = {}
+    current_inv = 0
+    for m in range(1, TOTAL_MONTHS + 1):
+        total_prod_m = sum(solver.Value(usage[(r, m)]) for r in range(MAX_RUNS_RC))
+        dem_m = int(math.ceil(demand["AryoSeven_RC"].get(m, 0)))
+        current_inv = current_inv + total_prod_m - dem_m
+        inv_traj_RC["AryoSeven_RC"][m] = current_inv
+
+    return final_plan_RC, inv_traj_RC
+
+
+def build_schedule_with_inventory(
+    data: dict[str, dict],
+    demand: dict[str, dict],
+) -> tuple[list[dict], dict[str, dict]]:
+    model = cp_model.CpModel()
+    bigM = 1_000_000_000
+
+    # 1) Filter relevant products
+    all_prods = list(data["Common_Lines"].keys())
+    products = [p for p in all_prods if p in demand]
+    if not products:
+        print("No matching products. Exiting.")
+        return [], {}
+
+    # 2) Gather product parameters
+    product_lines: dict[str, dict] = {}
+    product_factor: dict[str, float] = {}
+    product_harvest: dict[str, int] = {}
+    base_configs: dict[str, dict] = {}
+    for p in products:
+        conf_list = data[p]  # e.g., [base_conf, {"lines": [...]}]
+        base_conf = conf_list[0]
+        base_configs[p] = base_conf
+        lines_conf = conf_list[1]
+        factor = base_conf.get("Protein_per_1000L_BR", 0.0)
+        harvest = base_conf.get("Harvest", 0)
+        if "lines" in lines_conf:
+            lines_list = lines_conf["lines"]
+        else:
+            lines_list = lines_conf.get("RC", [])
+        active_lines: dict[str, dict] = {}
+        for li in lines_list:
+            if li.get("status") == "active":
+                active_lines[li["id"]] = li
+        product_lines[p] = active_lines
+        product_factor[p] = factor
+        product_harvest[p] = harvest
+
+    # 3) Decision variables for production runs
+    activate_run: dict[tuple[str, int], cp_model.IntVar] = {}
+    use_line: dict[tuple[str, int, str], cp_model.IntVar] = {}
+    stage_start: dict[
+        tuple[str, int, str, int], cp_model.IntVar
+    ] = {}  # (p, r, l_id, stage_key): chain stages (thawing and BR stages)
+    stage_end: dict[tuple[str, int, str, int], cp_model.IntVar] = {}
+    finish_time: dict[tuple[str, int], cp_model.IntVar] = {}
+    resources: dict[tuple[str, str], list[cp_model.IntervalVar]] = {}
+    harvest_vars: dict[
+        tuple[str, int, str, int], tuple[cp_model.IntVar, cp_model.IntVar]
+    ] = {}  # (p, r, l_id, br_stage_key): (harv_st, harv_en)
+    hold_vars: dict[
+        tuple[str, int, str, int], tuple[cp_model.IntVar, cp_model.IntVar]
+    ] = {}  # (p, r, l_id, br_stage_key): (hold_st, hold_en)
+    mab_vars: dict[
+        tuple[str, int, str, int, int], tuple[cp_model.IntVar, cp_model.IntVar]
+    ] = {}  # (p, r, l_id, br_stage_key, mab_idx): (mab_st, mab_en)
+    fu_vars: dict[
+        tuple[str, int, str, int, str], tuple[cp_model.IntVar, cp_model.IntVar]
+    ] = {}  # (p, r, l_id, br_stage_key, fu_name): (fu_st, fu_en)
+
+    NEGATIVE_BOUND = -180
+
+    for p in products:
+        lines_dict = product_lines[p]
+        thawing = base_configs[p].get("Cell_Thawing & SF", 0)
+        for r in range(MAX_RUNS):
+            activate_run[(p, r)] = model.NewBoolVar(f"activate_{p}_{r}")
+            for l_id in lines_dict:
+                use_line[(p, r, l_id)] = model.NewBoolVar(f"use_{p}_{r}_l{l_id}")
+            model.Add(
+                sum(use_line[(p, r, l)] for l in lines_dict) == activate_run[(p, r)]
+            )
+
+            candidate_finishes = []
+
+            for l_id, l_conf in lines_dict.items():
+                br_map = l_conf["BRs"]
+                overlaps = l_conf.get("Overlaps") or {}
+                br_names = list(br_map.keys())
+                n_br = len(br_names)
+
+                # Build chain stages: stage 0 = thawing; then BR stages (integer keys)
+                chain_keys = []
+                chain_keys.append(0)
+                thaw_st = model.NewIntVar(
+                    NEGATIVE_BOUND, 50000, f"thaw_{p}_{r}_l{l_id}_0"
+                )
+                thaw_en = model.NewIntVar(
+                    NEGATIVE_BOUND, 50000, f"thaw_{p}_{r}_l{l_id}_0"
+                )
+                stage_start[(p, r, l_id, 0)] = thaw_st
+                stage_end[(p, r, l_id, 0)] = thaw_en
+                thaw_interval = model.NewOptionalIntervalVar(
+                    thaw_st,
+                    thawing - 1,
+                    thaw_en,
+                    use_line[(p, r, l_id)],
+                    f"thaw_interval_{p}_{r}_l{l_id}_0",
+                )
+                res_id = (l_id, "CellThawing & SF")
+                if res_id not in resources:
+                    resources[res_id] = []
+                resources[res_id].append(thaw_interval)
+
+                # Determine harvest rules.
+                n_harvest = l_conf.get("N_Harvest", 1)
+                if n_harvest == 2:
+                    candidate_indices = [
+                        i for i, br in enumerate(br_names) if parse_volume(br) >= 1000
+                    ]
+                    if len(candidate_indices) >= 2:
+                        first_harvest_index = candidate_indices[-2]
+                        second_harvest_index = candidate_indices[-1]
+                    else:
+                        first_harvest_index = second_harvest_index = n_br - 1
+                else:
+                    first_harvest_index = n_br - 1
+
+                # Process each BR stage.
+                for i, brn in enumerate(br_names):
+                    stage_key = i + 1
+                    chain_keys.append(stage_key)
+                    dur = br_map[brn]  # Duration without harvest/hold/mab/follow-up.
+                    st_var = model.NewIntVar(
+                        NEGATIVE_BOUND, 50000, f"st_{p}_{r}_l{l_id}_{stage_key}"
+                    )
+                    en_var = model.NewIntVar(
+                        NEGATIVE_BOUND, 50000, f"en_{p}_{r}_l{l_id}_{stage_key}"
+                    )
+                    stage_start[(p, r, l_id, stage_key)] = st_var
+                    stage_end[(p, r, l_id, stage_key)] = en_var
+                    interval = model.NewOptionalIntervalVar(
+                        st_var,
+                        dur - 1,
+                        en_var,
+                        use_line[(p, r, l_id)],
+                        f"interval_{p}_{r}_l{l_id}_{stage_key}",
+                    )
+                    res_id = (l_id, brn)
+                    if res_id not in resources:
+                        resources[res_id] = []
+                    resources[res_id].append(interval)
+
+                    # Determine if this BR stage qualifies for harvest.
+                    add_harvest = False
+                    if n_harvest == 1 and i == n_br - 1:
+                        add_harvest = True
+                    elif n_harvest == 2 and i in [
+                        first_harvest_index,
+                        second_harvest_index,
+                    ]:
+                        add_harvest = True
+                    if add_harvest:
+                        # Harvest stage (one day) starting one day after BR stage end.
+                        harv_st = model.NewIntVar(
+                            NEGATIVE_BOUND,
+                            50000,
+                            f"harv_st_{p}_{r}_l{l_id}_{stage_key}",
+                        )
+                        harv_en = model.NewIntVar(
+                            NEGATIVE_BOUND,
+                            50000,
+                            f"harv_en_{p}_{r}_l{l_id}_{stage_key}",
+                        )
+                        model.Add(harv_st == en_var + 1).OnlyEnforceIf(
+                            use_line[(p, r, l_id)]
+                        )
+                        model.Add(harv_en == harv_st).OnlyEnforceIf(
+                            use_line[(p, r, l_id)]
+                        )
+                        harv_interval = model.NewOptionalIntervalVar(
+                            harv_st,
+                            1 - 1,
+                            harv_en,
+                            use_line[(p, r, l_id)],
+                            f"harv_interval_{p}_{r}_l{l_id}_{stage_key}",
+                        )
+                        res_id_h = (l_id, f"Harvest {brn}")
+                        if res_id_h not in resources:
+                            resources[res_id_h] = []
+                        resources[res_id_h].append(harv_interval)
+                        harvest_vars[(p, r, l_id, stage_key)] = (harv_st, harv_en)
+
+                        # Optional Hold stage.
+                        if l_conf.get("Hold", 0) in [1, "Yes"]:
+                            hold_st = model.NewIntVar(
+                                NEGATIVE_BOUND,
+                                50000,
+                                f"hold_st_{p}_{r}_l{l_id}_{stage_key}",
+                            )
+                            hold_en = model.NewIntVar(
+                                NEGATIVE_BOUND,
+                                50000,
+                                f"hold_en_{p}_{r}_l{l_id}_{stage_key}",
+                            )
+                            model.Add(hold_st == harv_en + 1).OnlyEnforceIf(
+                                use_line[(p, r, l_id)]
+                            )
+                            model.Add(hold_en == hold_st).OnlyEnforceIf(
+                                use_line[(p, r, l_id)]
+                            )
+                            hold_interval = model.NewOptionalIntervalVar(
+                                hold_st,
+                                1 - 1,
+                                hold_en,
+                                use_line[(p, r, l_id)],
+                                f"hold_interval_{p}_{r}_l{l_id}_{stage_key}",
+                            )
+                            res_id_hold = (l_id, f"Hold {brn}")
+                            if res_id_hold not in resources:
+                                resources[res_id_hold] = []
+                            resources[res_id_hold].append(hold_interval)
+                            hold_vars[(p, r, l_id, stage_key)] = (hold_st, hold_en)
+
+                        # Mab stages.
+                        mabs_dict = l_conf.get("Mabs", {})
+                        mab_key = f"After {brn}"
+                        if mab_key in mabs_dict:
+                            num_mabs = mabs_dict[mab_key]
+                            if (p, r, l_id, stage_key) in hold_vars:
+                                ref_expr = hold_vars[(p, r, l_id, stage_key)][1]
+                            else:
+                                ref_expr = en_var + 1  # Ensure separation from Harvest.
+                            mab_en_prev = None
+                            for mab_idx in range(1, num_mabs + 1):
+                                mab_st = model.NewIntVar(
+                                    NEGATIVE_BOUND,
+                                    50000,
+                                    f"mab_st_{p}_{r}_l{l_id}_{stage_key}_{mab_idx}",
+                                )
+                                mab_en = model.NewIntVar(
+                                    NEGATIVE_BOUND,
+                                    50000,
+                                    f"mab_en_{p}_{r}_l{l_id}_{stage_key}_{mab_idx}",
+                                )
+                                if mab_idx == 1:
+                                    model.Add(mab_st == ref_expr)
+                                else:
+                                    model.Add(mab_st == mab_en_prev + 1)
+                                model.Add(mab_en == mab_st).OnlyEnforceIf(
+                                    use_line[(p, r, l_id)]
+                                )
+                                mab_interval = model.NewOptionalIntervalVar(
+                                    mab_st,
+                                    1 - 1,
+                                    mab_en,
+                                    use_line[(p, r, l_id)],
+                                    f"mab_interval_{p}_{r}_l{l_id}_{stage_key}_{mab_idx}",
+                                )
+                                res_id_mab = (l_id, f"Mab {brn} {mab_idx}")
+                                if res_id_mab not in resources:
+                                    resources[res_id_mab] = []
+                                resources[res_id_mab].append(mab_interval)
+                                mab_vars[(p, r, l_id, stage_key, mab_idx)] = (
+                                    mab_st,
+                                    mab_en,
+                                )
+                                mab_en_prev = mab_en
+
+                        # --- MODIFIED CODE: Handling "SS's" for AryoSeven_BR ---
+                        # Check for "SS's" dict
+                        sss_dict = l_conf.get("SS's", {})
+                        sss_key = f"After {brn}"
+                        if sss_key in sss_dict:
+                            num_sss = sss_dict[sss_key]
+                            # If there's a hold stage, reference its end. Else reference en_var + 1
+                            if (p, r, l_id, stage_key) in hold_vars:
+                                ref_expr = hold_vars[(p, r, l_id, stage_key)][1]
+                            else:
+                                ref_expr = en_var + 1  # or the harvest end, etc.
+                            sss_en_prev = None
+                            for sss_idx in range(1, num_sss + 1):
+                                sss_st = model.NewIntVar(
+                                    NEGATIVE_BOUND,
+                                    50000,
+                                    f"sss_st_{p}_{r}_l{l_id}_{stage_key}_{sss_idx}",
+                                )
+                                sss_en = model.NewIntVar(
+                                    NEGATIVE_BOUND,
+                                    50000,
+                                    f"sss_en_{p}_{r}_l{l_id}_{stage_key}_{sss_idx}",
+                                )
+                                if sss_idx == 1:
+                                    model.Add(sss_st == ref_expr)
+                                else:
+                                    model.Add(sss_st == sss_en_prev + 1)
+                                model.Add(sss_en == sss_st).OnlyEnforceIf(
+                                    use_line[(p, r, l_id)]
+                                )
+                                sss_interval = model.NewOptionalIntervalVar(
+                                    sss_st,
+                                    1 - 1,
+                                    sss_en,
+                                    use_line[(p, r, l_id)],
+                                    f"sss_interval_{p}_{r}_l{l_id}_{stage_key}_{sss_idx}",
+                                )
+                                # Provide resource ID if needed, or skip if it doesn't block anything
+                                res_id_sss = (l_id, f"SS's {brn} {sss_idx}")
+                                resources.setdefault(res_id_sss, []).append(
+                                    sss_interval
+                                )
+
+                                # store for final plan printing
+                                mab_vars[(p, r, l_id, stage_key, 1000 + sss_idx)] = (
+                                    sss_st,
+                                    sss_en,
+                                )  # or define a new dict if you prefer
+                                sss_en_prev = sss_en
+
+                        # FOLLOW-UP STAGES.
+                        # Handle FU stages, including those with same start dates
+                        fu_key = f"Follow_Up_{brn}"
+                        if fu_key in l_conf:
+                            fu_dict = l_conf[fu_key]
+                            fu_over = l_conf.get(f"{fu_key}_Overlaps", None)
+                            same_start_dict = l_conf.get(f"{fu_key}_SameStarts", {})
+
+                            # Ensure same_start_dict is a dictionary
+                            if isinstance(same_start_dict, str):
+                                # If it's a string, treat it as a mapping (e.g., "DP_QC_Test & Visual Insp." to "1")
+                                same_start_dict = {same_start_dict: 1}
+                            elif not isinstance(same_start_dict, dict):
+                                # If it's neither a dictionary nor a string, raise an error
+                                raise ValueError(
+                                    f"Expected a dictionary or string for 'SameStarts', but got {type(same_start_dict)}"
+                                )
+
+                            # Determine reference for FU start (last completed stage, whether Hold or Mab)
+                            # Determine reference for FU start (last completed stage, whether Hold or Mab)
+                            if any(
+                                (p, r, l_id, stage_key, idx) in mab_vars
+                                for idx in range(1, mabs_dict.get(mab_key, 0) + 1)
+                            ):
+                                # If there are Mab stages, use the end of the last Mab stage as the reference
+                                idx = 1
+                                while (p, r, l_id, stage_key, idx) in mab_vars:
+                                    idx += 1
+                                ref_fu = mab_vars[(p, r, l_id, stage_key, idx - 1)][1]
+                                ref_fu = ref_fu + 1
+                            elif (p, r, l_id, stage_key) in hold_vars:
+                                # If there is a Hold stage, use the end of the Hold stage as the reference
+                                ref_fu = hold_vars[(p, r, l_id, stage_key)][1]
+                            else:
+                                # Otherwise, use the end of the Harvest stage as the reference
+                                ref_fu = harvest_vars[(p, r, l_id, stage_key)][1]
+
+                            # Start FU stages 1 day after the reference stage ends
+                            fu_prev_end = model.NewIntVar(
+                                NEGATIVE_BOUND,
+                                50000,
+                                f"fu_ref_{p}_{r}_l{l_id}_{stage_key}",
+                            )
+                            model.Add(fu_prev_end == ref_fu + 1)
+
+                            # Create an ordered list of FU stages as they appear in the dictionary
+                            fu_stage_order = list(fu_dict.keys())
+
+                            # Extracting the key and value
+                            for key, value in same_start_dict.items():
+                                # Split the key and strip whitespace
+                                parts = [part.strip() for part in key.split("&")]
+                                # Create the desired list
+                                result = parts + [value]
+
+                            # Adjust FU stage scheduling to ensure it follows the last Mab stage of the same BR (e.g., 4500).
+                            fu_prev_end = model.NewIntVar(
+                                NEGATIVE_BOUND,
+                                50000,
+                                f"fu_ref_{p}_{r}_l{l_id}_{stage_key}",
+                            )
+                            model.Add(
+                                fu_prev_end
+                                == mab_vars[(p, r, l_id, stage_key, mab_idx)][1] + 2
+                            )  # Mab stage ends, FU starts next day
+
+                            for fu_name in fu_stage_order:
+                                # 1) Check if fu_name is in any same-start group.
+                                matched_group = None
+                                for same_stages_str, _ in same_start_dict.items():
+                                    # e.g. same_stages_str = "DP_QC_Test & Visual Insp."
+                                    stages_list = same_stages_str.split(" & ")
+                                    if fu_name in stages_list:
+                                        matched_group = same_stages_str
+                                        break
+
+                                if matched_group is not None:
+                                    # === We have a same-start group that includes fu_name ===
+                                    stages_to_sync = matched_group.split(" & ")
+
+                                    # Check if any stage in this group is already scheduled (has an entry in fu_vars).
+                                    assigned_start = None
+                                    for stg in stages_to_sync:
+                                        stage_key_ = (p, r, l_id, stage_key, stg)
+                                        if stage_key_ in fu_vars:
+                                            # Found a stage already scheduled -> use its start for everyone else
+                                            assigned_start = fu_vars[stage_key_][0]
+                                            break
+
+                                    if assigned_start is None:
+                                        # No stage in the group is scheduled yet -> define a new start = fu_prev_end + 1
+                                        assigned_start = model.NewIntVar(
+                                            NEGATIVE_BOUND,
+                                            50000,
+                                            f"common_start_{p}_{r}_l{l_id}_{stage_key}_{matched_group}",
+                                        )
+                                        model.Add(
+                                            assigned_start == fu_prev_end
+                                        ).OnlyEnforceIf(use_line[(p, r, l_id)])
+
+                                    # Schedule all stages in the group that are not already scheduled.
+                                    for stg in stages_to_sync:
+                                        stage_key_ = (p, r, l_id, stage_key, stg)
+                                        if stage_key_ not in fu_vars:
+                                            fu_st = model.NewIntVar(
+                                                NEGATIVE_BOUND,
+                                                50000,
+                                                f"fu_st_{p}_{r}_l{l_id}_{stage_key}_{stg}",
+                                            )
+                                            fu_en = model.NewIntVar(
+                                                NEGATIVE_BOUND,
+                                                50000,
+                                                f"fu_en_{p}_{r}_l{l_id}_{stage_key}_{stg}",
+                                            )
+                                            # All same-start stages begin at the assigned_start.
+                                            model.Add(
+                                                fu_st == assigned_start
+                                            ).OnlyEnforceIf(use_line[(p, r, l_id)])
+                                            model.Add(
+                                                fu_en == fu_st + fu_dict[stg] - 1
+                                            ).OnlyEnforceIf(use_line[(p, r, l_id)])
+
+                                            fu_interval = model.NewOptionalIntervalVar(
+                                                fu_st,
+                                                fu_dict[stg] - 1,
+                                                fu_en,
+                                                use_line[(p, r, l_id)],
+                                                f"fu_interval_{p}_{r}_l{l_id}_{stage_key}_{stg}",
+                                            )
+                                            res_id_fu = (l_id, f"FU {brn} {stg}")
+                                            resources.setdefault(res_id_fu, []).append(
+                                                fu_interval
+                                            )
+
+                                            fu_vars[stage_key_] = (fu_st, fu_en)
+                                    # Update fu_prev_end to one day after the latest finish in the group.
+                                    group_end = model.NewIntVar(
+                                        NEGATIVE_BOUND,
+                                        50000,
+                                        f"group_end_{p}_{r}_l{l_id}_{stage_key}_{matched_group}",
+                                    )
+                                    group_ends = [
+                                        fu_vars[(p, r, l_id, stage_key, stg)][1]
+                                        for stg in stages_to_sync
+                                    ]
+                                    model.AddMaxEquality(group_end, group_ends)
+                                    fu_prev_end = group_end + 1
+
+                                    # Skip further processing for this fu_name (already handled).
+                                    continue
+
+                                # If the stage is already in result, skip it.
+                                if fu_name in result:
+                                    continue
+
+                                # For individual FU stages not in same-start groups:
+                                # Determine if this is the first FU stage or not.
+                                idx = fu_stage_order.index(fu_name)
+                                if fu_stage_order[idx - 1] in result:
+                                    # First FU stage (or previous already handled): start at fu_prev_end.
+                                    fu_prev_end = (
+                                        fu_vars[
+                                            (
+                                                p,
+                                                r,
+                                                l_id,
+                                                stage_key,
+                                                fu_stage_order[idx - 1],
+                                            )
+                                        ][1]
+                                        + 1
+                                    )
+                                # For subsequent stages, enforce overlap if defined.
+                                prev_fu_name = fu_stage_order[idx - 1]
+                                # Look for an overlap definition between prev_fu_name and fu_name.
+                                overlap_key = f"{prev_fu_name} & {fu_name}"
+                                if isinstance(fu_over, dict):
+                                    ov_val = fu_over.get(overlap_key, None)
+                                    if ov_val is None:
+                                        # Try the reverse order.
+                                        overlap_key = f"{fu_name} & {prev_fu_name}"
+                                        ov_val = fu_over.get(overlap_key, None)
+                                else:
+                                    # When fu_over is a simple value (like "None")
+                                    ov_val = fu_over
+
+                                # Now apply FU overlap logic similar to BR overlaps.
+                                fu_st = model.NewIntVar(
+                                    NEGATIVE_BOUND,
+                                    50000,
+                                    f"fu_st_{p}_{r}_l{l_id}_{stage_key}_{fu_name}",
+                                )
+                                fu_en = model.NewIntVar(
+                                    NEGATIVE_BOUND,
+                                    50000,
+                                    f"fu_en_{p}_{r}_l{l_id}_{stage_key}_{fu_name}",
+                                )
+
+                                if ov_val is not None and ov_val != "None":
+                                    if ov_val == 1:
+                                        # No gap between stages.
+                                        model.Add(fu_st == fu_prev_end).OnlyEnforceIf(
+                                            use_line[(p, r, l_id)]
+                                        )
+                                    elif ov_val == "Full":
+                                        # FU stage ends exactly when previous ends.
+                                        model.Add(fu_en == fu_prev_end).OnlyEnforceIf(
+                                            use_line[(p, r, l_id)]
+                                        )
+                                    else:
+                                        # Numeric overlap: next stage starts earlier.
+                                        model.Add(
+                                            fu_st == fu_prev_end - ov_val
+                                        ).OnlyEnforceIf(use_line[(p, r, l_id)])
+                                else:
+                                    # No overlap defined: schedule sequentially (i.e. start immediately after previous FU stage).
+                                    model.Add(fu_st == fu_prev_end).OnlyEnforceIf(
+                                        use_line[(p, r, l_id)]
+                                    )
+                                # End time of the current FU stage.
+                                model.Add(
+                                    fu_en == fu_st + fu_dict[fu_name] - 1
+                                ).OnlyEnforceIf(use_line[(p, r, l_id)])
+                                # Create the interval.
+                                fu_interval = model.NewOptionalIntervalVar(
+                                    fu_st,
+                                    fu_dict[fu_name] - 1,
+                                    fu_en,
+                                    use_line[(p, r, l_id)],
+                                    f"fu_interval_{p}_{r}_l{l_id}_{stage_key}_{fu_name}",
+                                )
+                                res_id_fu = (l_id, f"FU {brn} {fu_name}")
+                                resources.setdefault(res_id_fu, []).append(fu_interval)
+                                fu_vars[(p, r, l_id, stage_key, fu_name)] = (
+                                    fu_st,
+                                    fu_en,
+                                )
+                                # Update fu_prev_end to be one day after this FU stage ends.
+                                fu_prev_end = fu_en + 1
+
+                # End processing each BR stage.
+                # Enforce consecutive constraints on the chain (thawing and BR stages).
+                for idx in range(len(chain_keys) - 1):
+                    curr_key = chain_keys[idx]
+                    next_key = chain_keys[idx + 1]
+                    if idx == 0:
+                        model.Add(
+                            stage_start[(p, r, l_id, next_key)]
+                            == stage_end[(p, r, l_id, curr_key)]
+                        ).OnlyEnforceIf(use_line[(p, r, l_id)])
+                    else:
+                        prev_br = br_names[curr_key - 1]
+                        next_br = br_names[next_key - 1]
+                        ov_val = overlaps.get(f"{prev_br} & {next_br}") or overlaps.get(
+                            f"{next_br} & {prev_br}"
+                        )
+                        if ov_val is not None and ov_val != "None":
+                            if ov_val == 1:
+                                model.Add(
+                                    stage_start[(p, r, l_id, next_key)]
+                                    == stage_end[(p, r, l_id, curr_key)]
+                                ).OnlyEnforceIf(use_line[(p, r, l_id)])
+                            elif ov_val == "Full":
+                                model.Add(
+                                    stage_end[(p, r, l_id, next_key)]
+                                    == stage_end[(p, r, l_id, curr_key)]
+                                ).OnlyEnforceIf(use_line[(p, r, l_id)])
+                            else:
+                                model.Add(
+                                    stage_start[(p, r, l_id, next_key)]
+                                    == stage_end[(p, r, l_id, curr_key)] - ov_val + 1
+                                ).OnlyEnforceIf(use_line[(p, r, l_id)])
+                        else:
+                            model.Add(
+                                stage_start[(p, r, l_id, next_key)]
+                                >= stage_end[(p, r, l_id, curr_key)]
+                            ).OnlyEnforceIf(use_line[(p, r, l_id)])
+
+                # Compute finish time for this line as the maximum of:
+                # - the end of the last chain stage,
+                # - any Harvest, Hold, Mab, or Follow-Up stage end times.
+                if len(chain_keys) > 0:
+                    chain_finish = stage_end[(p, r, l_id, chain_keys[-1])]
+                else:
+                    chain_finish = thaw_en
+                harvest_ends_line = []
+                for key in range(1, len(br_names) + 1):
+                    if (p, r, l_id, key) in harvest_vars:
+                        harvest_ends_line.append(harvest_vars[(p, r, l_id, key)][1])
+                hold_ends_line = []
+                for key in range(1, len(br_names) + 1):
+                    if (p, r, l_id, key) in hold_vars:
+                        hold_ends_line.append(hold_vars[(p, r, l_id, key)][1])
+                mab_ends_line = []
+                for key in range(1, len(br_names) + 1):
+                    idx = 1
+                    while (p, r, l_id, key, idx) in mab_vars:
+                        mab_ends_line.append(mab_vars[(p, r, l_id, key, idx)][1])
+                        idx += 1
+                fu_ends_line = []
+                for key in range(1, len(br_names) + 1):
+                    for fu_key in [
+                        k
+                        for k in fu_vars
+                        if k[0] == p and k[1] == r and k[2] == l_id and k[3] == key
+                    ]:
+                        fu_ends_line.append(fu_vars[fu_key][1])
+                if harvest_ends_line or hold_ends_line or mab_ends_line or fu_ends_line:
+                    fin_l = model.NewIntVar(
+                        NEGATIVE_BOUND, 50000, f"fin_{p}_{r}_l{l_id}"
+                    )
+                    candidates = (
+                        [chain_finish]
+                        + harvest_ends_line
+                        + hold_ends_line
+                        + mab_ends_line
+                        + fu_ends_line
+                    )
+                    model.AddMaxEquality(fin_l, candidates)
+                else:
+                    fin_l = chain_finish
+
+                candidate = model.NewIntVar(
+                    NEGATIVE_BOUND, 50000, f"candidate_finish_{p}_{r}_{l_id}"
+                )
+                model.Add(candidate == fin_l).OnlyEnforceIf(use_line[(p, r, l_id)])
+                model.Add(candidate == NEGATIVE_BOUND).OnlyEnforceIf(
+                    use_line[(p, r, l_id)].Not()
+                )
+                candidate_finishes.append(candidate)
+
+            if candidate_finishes:
+                ft = model.NewIntVar(NEGATIVE_BOUND, 50000, f"finish_{p}_{r}")
+                model.AddMaxEquality(ft, candidate_finishes)
+                finish_time[(p, r)] = ft
+            else:
+                finish_time[(p, r)] = model.NewIntVar(0, 0, f"finish_{p}_{r}_null")
+
+    # Resource no-overlap.
+    for _, intervals in resources.items():
+        model.AddNoOverlap(intervals)
+
+    # 4) Production Calculation: volume -> liters -> protein.
+    line_final_vol: dict[tuple[str, str], float] = {}
+    for p in products:
+        for l_id, l_conf in product_lines[p].items():
+            br_names = list(l_conf["BRs"].keys())
+            if not br_names:
+                line_final_vol[(p, l_id)] = 0
+                continue
+            last_vol = parse_volume(br_names[-1])
+            if len(br_names) >= 2:
+                sec_vol = parse_volume(br_names[-2])
+                if last_vol >= 1000 and sec_vol >= 1000:
+                    line_final_vol[(p, l_id)] = last_vol + sec_vol
+                else:
+                    line_final_vol[(p, l_id)] = last_vol
+            else:
+                line_final_vol[(p, l_id)] = last_vol
+
+    produced_liters: dict[tuple[str, int], cp_model.IntVar] = {}
+    for p in products:
+        for r in range(MAX_RUNS):
+            partial_vars = []
+            for l_id in product_lines[p]:
+                vol = int(line_final_vol[(p, l_id)])
+                pLit = model.NewIntVar(0, vol, f"pLit_{p}_{r}_l{l_id}")
+                model.AddMultiplicationEquality(pLit, [use_line[(p, r, l_id)], vol])
+                partial_vars.append(pLit)
+            totLit = model.NewIntVar(0, bigM, f"totLit_{p}_{r}")
+            model.Add(totLit == sum(partial_vars))
+            produced_liters[(p, r)] = totLit
+
+    produced_protein_int: dict[tuple[str, int], cp_model.IntVar] = {}
+    for p in products:
+        f_int = int(round(product_factor[p]))
+        for r in range(MAX_RUNS):
+            prot = model.NewIntVar(0, bigM, f"prot_{p}_{r}")
+            produced_protein_int[(p, r)] = prot
+            plit = produced_liters[(p, r)]
+            model.Add(plit * f_int >= prot * 1000)
+            diff = model.NewIntVar(0, bigM, f"diff_{p}_{r}")
+            model.Add(diff == plit * f_int - prot * 1000)
+            model.Add(diff < 1000)
+
+    # ================================
+    # INVENTORY + PARTIAL USAGE (Scenario B)
+    # ================================
+
+    # 1) Remove the old b_run_expires_month approach
+    #    Remove usage of "expires_this_month", "sum(...)=1", etc.
+
+    usage = {}
+    expiration_date = {}
+    isValid = {}
+
+    # (A) Create expiration_date
+
+    for p in products:
+        for r in range(MAX_RUNS):
+            exp_date = model.NewIntVar(0, bigM, f"exp_{p}_{r}")
+            # Shelf life in days = SHELF_LIFE * DAYS_PER_MONTH
+            model.Add(exp_date == finish_time[(p, r)] + SHELF_LIFE * DAYS_PER_MONTH)
+            expiration_date[(p, r)] = exp_date
+
+    # (B) Create usage variables for partial allocation across months
+    for p in products:
+        for r in range(MAX_RUNS):
+            for m in range(1, TOTAL_MONTHS + 1):
+                usage[(p, r, m)] = model.NewIntVar(0, bigM, f"usage_{p}_{r}_m{m}")
+
+    # (C) Link total usage to produced_protein_int
+    for p in products:
+        for r in range(MAX_RUNS):
+            model.Add(
+                sum(usage[(p, r, m)] for m in range(1, TOTAL_MONTHS + 1))
+                <= produced_protein_int[(p, r)]
+            )
+
+    # (D) Demand coverage: sum usage across all runs in month m >= demand
+    for p in products:
+        for m in range(1, TOTAL_MONTHS + 1):
+            model.Add(
+                sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+                >= int(math.ceil(demand[p].get(m, 0)))
+            )
+
+    # (E) isValid[(p, r, m)] => run r can supply product p in month m
+    for p in products:
+        for r in range(MAX_RUNS):
+            for m in range(1, TOTAL_MONTHS + 1):
+                isValid[(p, r, m)] = model.NewBoolVar(f"isValid_{p}_{r}_m{m}")
+
+    # Link isValid to day-based shelf life:
+    for p in products:
+        for r in range(MAX_RUNS):
+            F = finish_time[(p, r)]  # day production finishes
+            E = expiration_date[(p, r)]
+            for m in range(1, TOTAL_MONTHS + 1):
+                month_start = (30 * m) + 5
+                month_end = 30 * m
+                valid = isValid[(p, r, m)]
+
+                # If valid=1 => run finishes on/before month_end AND not expired before month_start
+                model.Add(F <= month_end).OnlyEnforceIf(valid)
+                model.Add(E > month_start).OnlyEnforceIf(valid)
+
+                # If valid=0 => either finishes after the month ends OR expires before the month starts
+                # We can do big-M reification, or simpler direct constraints:
+                # model.Add(F > month_end).OnlyEnforceIf(valid.Not())
+                # model.Add(E <= month_start).OnlyEnforceIf(valid.Not())
+                # If you want "OR" logic, you'd need an extra bool.
+                # For simplicity, use F>month_end as the main contradiction.
+
+    # Force usage to 0 if not valid
+    for p in products:
+        for r in range(MAX_RUNS):
+            for m in range(1, TOTAL_MONTHS + 1):
+                model.Add(usage[(p, r, m)] <= bigM * isValid[(p, r, m)])
+
+    # 2) DEFINE MONTH-TO-MONTH INVENTORY
+    inventory = {}
+    for p in products:
+        for m in range(1, TOTAL_MONTHS + 1):
+            inventory[(p, m)] = model.NewIntVar(0, bigM, f"Inventory_{p}_m{m}")
+
+    # We interpret "monthly production" as the sum of usage in that month
+    # Because usage = how much product is actually allocated to month m
+    monthly_prod = {}
+    for p in products:
+        for m in range(1, TOTAL_MONTHS + 1):
+            monthly_prod[(p, m)] = model.NewIntVar(0, bigM, f"monthly_prod_{p}_m{m}")
+            model.Add(
+                monthly_prod[(p, m)] == sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+            )
+
+    # Demand is monthly_demand
+    monthly_demand = {}
+    for p in products:
+        for m in range(1, TOTAL_MONTHS + 1):
+            monthly_demand[p, m] = int(math.ceil(demand[p].get(m, 0)))
+
+    # 3) INVENTORY FLOW CONSTRAINTS
+    # Inv_{p,m} = Inv_{p,m-1} + monthly_prod[p,m] - monthly_demand[p,m]
+    for p in products:
+        for m in range(1, TOTAL_MONTHS + 1):
+            if m == 1:
+                # inventory in month 1 = production in month 1 - demand
+                model.Add(
+                    inventory[(p, m)] == monthly_prod[(p, m)] - monthly_demand[p, m]
+                )
+            else:
+                model.Add(
+                    inventory[(p, m)]
+                    == inventory[(p, m - 1)]
+                    + monthly_prod[(p, m)]
+                    - monthly_demand[p, m]
+                )
+            # Nonnegative
+            model.Add(inventory[(p, m)] >= 0)
+
+    # 4) MAKESPAN + PRODUCTION OBJECTIVE
+    all_finish = [finish_time[(p, r)] for p in products for r in range(MAX_RUNS)]
+    global_makespan = model.NewIntVar(NEGATIVE_BOUND, 50000, "makespan")
+    model.AddMaxEquality(global_makespan, all_finish)
+
+    total_production = model.NewIntVar(0, bigM, "total_production")
+    model.Add(
+        total_production
+        == sum(produced_protein_int[(p, r)] for p in products for r in range(MAX_RUNS))
+    )
+
+    model.Minimize(global_makespan + 1000 * total_production)
+
+    # ========== END MODIFIED SECTION ==========
+
+    # Solve
+    solver = cp_model.CpSolver()
+    solver.parameters.stop_after_first_solution = True
+    solver.parameters.max_time_in_seconds = 100.0
+    solver.parameters.log_search_progress = False
+    solver.parameters.num_search_workers = 4
+    status = solver.Solve(model)
+    if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        print("No feasible solution.")
+        return [], {}
+
+        # Add debug output to verify expiration months
+    print("\n=== Expiration Month Verification ===")
+    for p in products:
+        print(f"\nProduct: {p}")
+        for r in range(MAX_RUNS):
+            if solver.Value(isValid[(p, r, m)]):
+                exp_day = solver.Value(expiration_date[(p, r)])
+                exp_month = None
+                print(f"Run {r}:")
+                print(f"  Expiration day: {exp_day}")
+                print(f"  Should be in month: {(exp_day // 30) + 1}")
+                print(f"  Current expiration month: {exp_month}")
+                print("  ---")
+
+    for p in products:
+        print(f"\nProduct: {p}")
+        for r in range(MAX_RUNS):
+            for m in range(1, TOTAL_MONTHS + 1):
+                if solver.Value(isValid[(p, r, m)]):
+                    # Get run information
+                    fday = solver.Value(finish_time[(p, r)])
+                    exp_day = solver.Value(expiration_date[(p, r)])
+                    finish_date_str = day_to_date(fday)
+                    exp_date_str = day_to_date(exp_day)
+                    exp_day = solver.Value(expiration_date[(p, r)])
+
+                    # Find which month this run expires in
+                    # exp_month = None
+                    # for m in range(1, TOTAL_MONTHS + 1):
+                    #     print(f"  b_run_expires_month: {solver.Value(b_run_expires_month[(p, r, m)])}")
+                    #     if solver.Value(b_run_expires_month[(p, r, m)]) == 1 and solver.Value(activate_run[(p, r)]) == 1:
+                    #         exp_month = m
+                    #         break
+
+                    print(f"Run {r}:")
+                    print(f"  Finish Date: {finish_date_str}")
+                    print(f"  Finish day: {fday}")
+                    print(f"  Expiration day: {exp_day}")
+                    print(f"  Expiration Date: {exp_date_str}")
+                    print(f"  Expires in Month: {exp_month}")
+                    print(
+                        f"  Produced Protein: {solver.Value(produced_protein_int[(p, r)])}"
+                    )
+                    print("  ---")
+
+    # 7) Build final plan (updated for partial usage / Scenario B)
+    final_plan = []
+    print("\n=== Active Runs and Expiration Information ===")
+    for p in products:
+        print(f"\nProduct: {p}")
+        for r in range(MAX_RUNS):
+            if solver.Value(activate_run[(p, r)]) == 0:
+                continue
+
+            # Check if the run is valid in at least one month.
+            valid_run = False
+            for m in range(1, TOTAL_MONTHS + 1):
+                if solver.Value(isValid[(p, r, m)]) == 1:
+                    valid_run = True
+                    break
+            if not valid_run:
+                continue
+
+            # Get run information
+            fday = solver.Value(finish_time[(p, r)])
+            exp_day = solver.Value(expiration_date[(p, r)])
+            finish_date_str = day_to_date(fday)
+            exp_date_str = day_to_date(exp_day)
+
+            # Instead of assigning a unique production_month,
+            # accumulate the usage (i.e. how much production is allocated) per month.
+            monthly_usage = {}
+            for m in range(1, TOTAL_MONTHS + 1):
+                usage_val = solver.Value(usage[(p, r, m)])
+                if usage_val > 0:
+                    monthly_usage[m] = usage_val
+
+            print(f"Run {r}:")
+            print(f"  Finish Date: {finish_date_str}, Finish day: {fday}")
+            print(f"  Expiration Date: {exp_date_str}, Expiration day: {exp_day}")
+            print(f"  Monthly Usage: {monthly_usage}")
+
+            # Determine which production line was used:
+            used_line_id = None
+            for l_id in product_lines[p]:
+                if solver.Value(use_line[(p, r, l_id)]) == 1:
+                    used_line_id = l_id
+                    break
+
+            # Production quantity details
+            litv = solver.Value(produced_liters[(p, r)])
+            produced_f = (litv * product_factor[p]) / 1000.0
+
+            # Gather the stage details (same as before)
+            br_stages = []
+            if used_line_id is not None:
+                # Thawing stage.
+                thaw_stage = {
+                    "stage": "CellThawing & SF",
+                    "start_day": solver.Value(stage_start[(p, r, used_line_id, 0)]),
+                    "end_day": solver.Value(stage_end[(p, r, used_line_id, 0)]),
+                    "start_date": day_to_date(
+                        solver.Value(stage_start[(p, r, used_line_id, 0)])
+                    ),
+                    "end_date": day_to_date(
+                        solver.Value(stage_end[(p, r, used_line_id, 0)])
+                    ),
+                }
+                br_stages.append(thaw_stage)
+                l_conf = product_lines[p][used_line_id]
+                br_names = list(l_conf["BRs"].keys())
+                for i, brn in enumerate(br_names):
+                    stage_key = i + 1
+                    s_val = solver.Value(stage_start[(p, r, used_line_id, stage_key)])
+                    e_val = solver.Value(stage_end[(p, r, used_line_id, stage_key)])
+                    stage_dict = {
+                        "stage": brn,
+                        "start_day": s_val,
+                        "end_day": e_val,
+                        "start_date": day_to_date(s_val),
+                        "end_date": day_to_date(e_val),
+                    }
+                    br_stages.append(stage_dict)
+                    if (p, r, used_line_id, stage_key) in harvest_vars:
+                        harv_s = solver.Value(
+                            harvest_vars[(p, r, used_line_id, stage_key)][0]
+                        )
+                        harv_e = solver.Value(
+                            harvest_vars[(p, r, used_line_id, stage_key)][1]
+                        )
+                        harvest_dict = {
+                            "stage": f"Harvest {brn}",
+                            "start_day": harv_s,
+                            "end_day": harv_e,
+                            "start_date": day_to_date(harv_s),
+                            "end_date": day_to_date(harv_e),
+                        }
+                        br_stages.append(harvest_dict)
+                    if (p, r, used_line_id, stage_key) in hold_vars:
+                        hold_s = solver.Value(
+                            hold_vars[(p, r, used_line_id, stage_key)][0]
+                        )
+                        hold_e = solver.Value(
+                            hold_vars[(p, r, used_line_id, stage_key)][1]
+                        )
+                        hold_dict = {
+                            "stage": f"Hold {brn}",
+                            "start_day": hold_s,
+                            "end_day": hold_e,
+                            "start_date": day_to_date(hold_s),
+                            "end_date": day_to_date(hold_e),
+                        }
+                        br_stages.append(hold_dict)
+                    # Mab stages and Follow-Up stages
+                    mab_idx = 1
+                    while (p, r, used_line_id, stage_key, mab_idx) in mab_vars:
+                        mab_st = solver.Value(
+                            mab_vars[(p, r, used_line_id, stage_key, mab_idx)][0] + 1
+                        )
+                        mab_e = solver.Value(
+                            mab_vars[(p, r, used_line_id, stage_key, mab_idx)][1] + 1
+                        )
+                        mab_dict = {
+                            "stage": f"Mab {mab_idx} {brn}",
+                            "start_day": mab_st,
+                            "end_day": mab_e,
+                            "start_date": day_to_date(mab_st),
+                            "end_date": day_to_date(mab_e),
+                        }
+                        br_stages.append(mab_dict)
+                        mab_idx += 1
+                    # Insert a similar loop for the SS's that you stored under mab_vars with an offset like 1000+sss_idx
+                    sss_idx = 1001
+                    while (p, r, used_line_id, stage_key, sss_idx) in mab_vars:
+                        sss_st = solver.Value(
+                            mab_vars[(p, r, used_line_id, stage_key, sss_idx)][0] + 1
+                        )
+                        sss_e = solver.Value(
+                            mab_vars[(p, r, used_line_id, stage_key, sss_idx)][1] + 1
+                        )
+                        sss_dict = {
+                            "stage": f"SS {sss_idx - 1000} {brn}",
+                            "start_day": sss_st,
+                            "end_day": sss_e,
+                            "start_date": day_to_date(sss_st),
+                            "end_date": day_to_date(sss_e),
+                        }
+                        br_stages.append(sss_dict)
+                        sss_idx += 1
+
+                    fu_key = f"Follow_Up_{brn}"
+                    if fu_key in l_conf:
+                        fu_dict = l_conf[fu_key]
+                        for fu_name, fu_duration in fu_dict.items():
+                            fu_var_key = (p, r, used_line_id, stage_key, fu_name)
+                            if fu_var_key in fu_vars:
+                                fu_st = solver.Value(fu_vars[fu_var_key][0])
+                                fu_e = solver.Value(fu_vars[fu_var_key][1])
+                                fu_dict_out = {
+                                    "stage": f"FU {fu_name}",
+                                    "start_day": fu_st,
+                                    "end_day": fu_e,
+                                    "start_date": day_to_date(fu_st),
+                                    "end_date": day_to_date(fu_e),
+                                }
+                                br_stages.append(fu_dict_out)
+
+            # Determine a release day:
+            release_day = None
+            for stage in br_stages:
+                if "Release" in stage["stage"]:
+                    release_day = stage["end_day"]
+                    break
+            if release_day is None:
+                release_day = fday
+
+            # Build the final plan dictionary (no longer using a single production month)
+            final_plan.append(
+                {
+                    "product": p,
+                    "run_index": r,
+                    "line_used": used_line_id,
+                    "finish_day": fday,
+                    "finish_date": finish_date_str,
+                    "monthly_usage": monthly_usage,  # new field with a month->usage mapping
+                    "liters": litv,
+                    "production_month": None,
+                    "produced_protein": produced_f,
+                    "br_stages": br_stages,
+                    "release_day": release_day,
+                    "expiration_date": exp_day,
+                    "expiration_date_str": exp_date_str,
+                }
+            )
+
+    # Optionally, sort the final plan (you may sort by product name, or use another criterion)
+    final_plan.sort(key=lambda x: (x["product"]))
+
+    # Instead of reading the model’s inventory variables (which might be driven to 0)
+    # we compute the cumulative inventory from the solved usage values.
+    inv_traj: dict[str, dict[int, int]] = {}
+    for p in products:
+        inv_traj[p] = {}
+        current_inv = 0
+        for m in range(1, TOTAL_MONTHS + 1):
+            # Sum the production allocated to product p in period m over all runs.
+            # Here, usage[(p, r, m)] is the CP variable from which we get the solver’s value.
+            monthly_production = sum(
+                solver.Value(usage[(p, r, m)]) for r in range(MAX_RUNS)
+            )
+            monthly_demand = int(math.ceil(demand[p].get(m, 0)))
+            # Cumulatively update inventory:
+            # current_inv = previous_inv + production in m - demand in m
+            current_inv = current_inv + monthly_production - monthly_demand
+            inv_traj[p][m] = current_inv
+
+    return final_plan, inv_traj
+
+
+############################################################################################################################
+
+
+# --- Compute Inventory per Period Considering Shelf Life ---
+def compute_inventory_by_period(final_plan, max_period):
+    """
+    For each production run in final_plan, compute the available (non–expired) protein
+    at the end of each period, using whole–unit expiration.
+
+    Each period m covers day offsets from 30*(m-1) to 30*m-1.
+    The available amount for a run in period m is computed as follows:
+       - If the run has not finished by the period end or is already expired by the period start, available = 0.
+       - Otherwise, compute the run's base leftover (produced protein minus total allocated usage up to and including period m).
+       - If the expiration day falls within the current period (i.e. exp_day <= period_end),
+         then the run’s entire remaining amount is expired in that period (available = 0).
+       - Otherwise, the entire base leftover is carried over as available.
+    The results are summed by product and by period.
+    """
+    inv_by_period = {}
+    # Loop over production runs.
+    for run in final_plan:
+        prod = run["product"]
+        produced = run["produced_protein"]
+        usage = run.get("monthly_usage", {})  # e.g. {1: 2481, 2: 826, ...}
+        finish = run["finish_day"]  # day offset when the run finished
+        exp_day = run[
+            "expiration_date"
+        ]  # computed as finish_day + SHELF_LIFE * DAYS_PER_MONTH
+        # Loop over each period.
+        for m in range(1, max_period + 1):
+            # Define period boundaries.
+            period_start = (m - 1) * 30
+            period_end = m * 30 - 1
+            # Initialize available for this run in period m.
+            available = 0.0
+            # Only if the run has finished (finish <= period_end) and is not expired
+            # before the period starts (exp_day > period_start) do we consider leftover.
+            if finish <= period_end and exp_day > period_start:
+                # Compute total consumption allocated from this run up to period m.
+                consumed = sum(usage.get(i, 0) for i in range(1, m + 1))
+                base_leftover = max(produced - consumed, 0)
+                # If the run expires within the current period, remove the entire leftover.
+                if exp_day <= period_end:
+                    available = 0.0
+                else:
+                    available = base_leftover
+            # Sum up the available production for the product in period m.
+            inv_by_period.setdefault(prod, {})
+            inv_by_period[prod][m] = inv_by_period[prod].get(m, 0) + available
+    return inv_by_period
+
+
+# --- Compute "New Production" per Period ---
+def compute_new_prod(final_plan, max_period):
+    """
+    For each run, if its finish day falls within a period, attribute its total produced protein
+    as “new production” for that period. Returns a dictionary:
+        { product: { period: total produced } }.
+    """
+    new_prod = {}
+    for run in final_plan:
+        prod = run["product"]
+        produced = run["produced_protein"]
+        finish = run["finish_day"]
+        # If finish is negative, assume production is counted in period 1.
+        period = 1 if finish < 0 else int(finish // 30) + 1
+        if period <= max_period:
+            new_prod.setdefault(prod, {}).setdefault(period, 0)
+            new_prod[prod][period] += produced
+    return new_prod
+
+
+# --- Production Runs Detail Report ---
+def print_production_runs_detail(final_plan):
+    """
+    Print a table showing details of each production run:
+      - Run index, production line,
+      - Finish date and day offset,
+      - Expiration date,
+      - Produced protein,
+      - The “leftover” (i.e. produced minus allocated usage),
+      - And a summary of the monthly usage allocation.
+    """
+    print("\n=== Production Runs Detail ===")
+    runs_by_product = {}
+    for run in final_plan:
+        prod = run["product"]
+        runs_by_product.setdefault(prod, []).append(run)
+
+    for prod in sorted(runs_by_product.keys()):
+        print(f"\nProduct: {prod}")
+        header = f"{'Run':<4} {'Line':<6} {'Finish Date':<12} {'Finish Day':>10} {'Exp Date':<12} {'Protein':>10} {'Leftover':>10} {'Monthly Usage':>30}"
+        print(header)
+        print("-" * len(header))
+        sorted_runs = sorted(
+            runs_by_product[prod],
+            key=lambda x: (
+                x["finish_day"],
+                sum(x["monthly_usage"].values()) if x["monthly_usage"] else 0,
+            ),
+        )
+        for run in sorted_runs:
+            run_idx = run.get("run_index", "N/A")
+            line_used = run.get("line_used", "N/A")
+            finish_day = run.get("finish_day", 0)
+            finish_date = run.get("finish_date", "N/A")
+            exp_date = run.get("expiration_date_str", "N/A")
+            produced_protein = run.get("produced_protein", 0)
+            usage = run.get("monthly_usage", {})
+            total_consumed = sum(usage.values())
+            leftover = produced_protein - total_consumed
+            usage_str = (
+                ", ".join(f"{k}:{v}" for k, v in usage.items()) if usage else "None"
+            )
+            print(
+                f"{run_idx:<4} {line_used!s:<6} {finish_date:<12} {finish_day:>10} {exp_date:<12} {produced_protein:>10.2f} {leftover:>10.2f} {usage_str:>30}"
+            )
+
+
+# --- Aggregated Calendar-Based Inventory Summary ---
+def print_aggregated_inventory(final_plan, demand, max_period):
+    """
+    Print an aggregated, calendar-based inventory table per product.
+    For each period (calculated as 30–day blocks using day_to_date),
+    the table shows:
+      - Period label (start and end dates)
+      - Demand (rounded up)
+      - New production that becomes available (from runs finishing in that period)
+      - Inventory at the start of the period (i.e. leftover from previous period)
+      - Inventory at the end of the period (aggregated over all production runs, accounting for shelf life)
+      - A balance (Inv Start + New Prod – Demand) with surplus/shortage annotation,
+      - And the leftover (which here is the same as Inv End).
+    """
+    # Assume new_prod is computed as before:
+    new_prod = compute_new_prod(final_plan, max_period)
+    inv_by_period = compute_inventory_by_period(final_plan, max_period)
+
+    print("\n=== Aggregated Calendar-Based Inventory Summary ===")
+    for prod in sorted(demand.keys()):
+        print(f"\nProduct: {prod}")
+        header = f"{'Period (Date Range)':<30} {'Demand':>10} {'New Prod':>10} {'Inv Start':>10} {'Inv End':>10} {'Balance':>20} {'Leftover':>10} {'Expired':>10}"
+        print(header)
+        print("-" * len(header))
+        for m in range(1, max_period + 1):
+            period_start_date = day_to_date((m - 1) * 30)
+            period_end_date = day_to_date(m * 30 - 1)
+            period_label = f"{period_start_date} - {period_end_date}"
+            dem_val = int(math.ceil(demand[prod].get(m, 0)))
+            np_val = new_prod.get(prod, {}).get(m, 0)
+            inv_start = inv_by_period[prod].get(m - 1, 0) if m > 1 else 0.0
+            inv_end = inv_by_period[prod].get(m, 0)
+            balance = (inv_start + np_val) - dem_val
+            balance_text = (
+                f"Surplus: {balance:.2f}"
+                if balance >= 0
+                else f"Shortage: {abs(balance):.2f}"
+            )
+            # With the new rule, expired amount is the difference between the theoretical balance (if no expiration)
+            # and the actual inventory carried (which in an expiration period becomes 0 for that run).
+            expired = max((inv_start + np_val - dem_val) - inv_end, 0)
+            print(
+                f"{period_label:<30} {dem_val:>10} {np_val:>10.2f} {inv_start:>10.2f} {inv_end:>10.2f} {balance_text:>20} {inv_end:>10.2f} {expired:>10.2f}"
+            )
+
+
+def print_plan_with_preparation_stages(updated_plan):
+    """
+    Print the plan with any newly inserted "Prepare" stages before the main BioReactor stages.
+    Assumes each run in updated_plan has:
+      - 'product'
+      - 'run_index'
+      - 'line_used'
+      - 'finish_day'
+      - 'finish_date'
+      - 'br_stages' (a list of stages, each with 'stage', 'start_day', 'end_day', 'start_date', 'end_date')
+    """
+    from textwrap import indent
+
+    # Group the runs by product for a cleaner display.
+    runs_by_product = {}
+    for run in updated_plan:
+        prod = run["product"]
+        runs_by_product.setdefault(prod, []).append(run)
+
+    print("\n=== UPDATED PLAN WITH PREPARATION STAGES ===")
+    for prod in sorted(runs_by_product.keys()):
+        print(f"\nProduct: {prod}")
+        # Sort runs by finish_day for consistency
+        sorted_runs = sorted(
+            runs_by_product[prod], key=lambda x: x.get("finish_day", 0)
+        )
+        for run in sorted_runs:
+            run_idx = run.get("run_index", "N/A")
+            line_used = run.get("line_used", "N/A")
+            finish_day = run.get("finish_day", 0)
+            finish_date = run.get("finish_date", "N/A")
+            produced_protein = run.get("produced_protein", 0)
+
+            print(
+                f"  Run={run_idx}, Line={line_used}, FinishDay={finish_day} ({finish_date}), "
+                f"Protein={produced_protein:.2f}"
+            )
+
+            # Print stages
+            br_stages = run.get("br_stages", [])
+            for stage in br_stages:
+                st_name = stage.get("stage", "N/A")
+                st_start_day = stage.get("start_day", "N/A")
+                st_end_day = stage.get("end_day", "N/A")
+                st_start_date = stage.get("start_date", "N/A")
+                st_end_date = stage.get("end_date", "N/A")
+
+                print(
+                    indent(
+                        f"- Stage={st_name}, "
+                        f"StartDay=({st_start_day}), EndDay=({st_end_day}), "
+                        f"StartDate=({st_start_date}), EndDate=({st_end_date})",
+                        prefix="    ",
+                    )
+                )
+            print()  # blank line after each run
+
+
+def add_bioreactor_preparation_stages(final_plan):
+    """
+    Post-process the final_plan to insert a preparation stage before each BioReactor stage
+    (any stage whose name indicates a numeric volume).
+
+    Rules:
+      - If parse_volume(stage_name) >= 1000 => 5 days prep
+      - Else => 3 days prep
+      - The new "X Prepare" stage ends exactly when the real BR stage starts.
+
+    This modifies only the final plan dictionary for reporting convenience
+    (it does NOT update the solver constraints or the actual schedule).
+    """
+    import copy
+
+    def parse_volume(br_name: str) -> float:
+        """Extracts the leading number from the stage name (e.g., '25' or '2000-3')."""
+        chunk = br_name.split("-")[0]  # e.g. "2000" from "2000-3"
+        digits = ""
+        for ch in chunk:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        return float(digits) if digits else 0.0
+
+    def day_to_date(day_offset: int) -> str:
+        """Convert a day offset to an ISO formatted date string. Adjust as needed to match your base date."""
+        from datetime import date, timedelta
+
+        base = date(2026, 1, 1)  # The base date in your system
+        actual_date = base + timedelta(days=day_offset)
+        return actual_date.isoformat()
+
+    updated_plan = []
+    for run in final_plan:
+        # Make a shallow copy of the run dictionary so we don't mutate the original
+        new_run = copy.copy(run)
+
+        # We'll rebuild the br_stages list with the inserted "Prepare" stages
+        new_br_stages = []
+        for st in run.get("br_stages", []):
+            st_name = st["stage"]
+            # Check if this stage name has a numeric volume
+            vol = parse_volume(st_name)
+            if vol > 0:  # It's a BioReactor stage
+                # Decide how many prep days
+                prep_days = 5 if vol >= 1000 else 3
+
+                # Insert a "Prepare" stage that ends exactly when this stage starts
+                prep_start = st["start_day"] - prep_days
+                prep_end = st["start_day"] - 1
+
+                prep_stage = {
+                    "stage": f"{st_name} Prepare",
+                    "start_day": prep_start,
+                    "end_day": prep_end,
+                    "start_date": day_to_date(prep_start),
+                    "end_date": day_to_date(prep_end),
+                }
+                new_br_stages.append(prep_stage)
+
+            # Whether it's a BR stage or not, we then append the original stage
+            new_br_stages.append(st)
+
+        # Replace the old br_stages with the new list
+        new_run["br_stages"] = new_br_stages
+        updated_plan.append(new_run)
+
+    return updated_plan
+
+
+def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand) -> None:
+    #################################################################################################
+    # print("\n=== FINAL PRODUCTION RUNS ===")
+    # for row in final_plan:
+    #     p = row["product"]
+    #     run_idx = row["run_index"]
+    #     fday = row["finish_day"]
+    #     fdate = row["finish_date"]
+    #     # pm = row["production_month"]
+    #     line_ = row["line_used"]
+    #     litv = row["liters"]
+    #     prot = row["produced_protein"]
+    #     stg = row["br_stages"]
+    #     print(
+    #         f"Product={p}, Run={run_idx}, FinishDay={fday} ({fdate}), "
+    #         f"Line={line_}, Liters={litv}, Protein={prot:.2f}"
+    #         # f"Product={p}, Run={run_idx}, FinishDay={fday} ({fdate}), "
+    #         # f"ProdMonth={pm}, Line={line_}, Liters={litv}, Protein={prot:.2f}"
+    #     )
+    #     for stage in stg:
+    #         print(
+    #             f"   Stage={stage['stage']}, StartDay=({stage['start_date']}), EndDay=({stage['end_date']})"
+    #         )
+    #     print("\n")
+    updated_plan = add_bioreactor_preparation_stages(final_plan)
+    print_plan_with_preparation_stages(updated_plan)
+    #################################################################################################
+
+    #################################################################################################
+    """
+    Print a complete report combining production run details and an aggregated, calendar-based inventory summary.
+    
+    The planning horizon is extended to cover all periods until the last expiration.
+    For each product, the report shows detailed run-level production information and then an inventory summary
+    that accounts for shelf life (with fractional availability in the period when production expires).
+    """
+    # Determine the maximum period to report.
+    # Compute the maximum expiration day among all runs and convert it into a period.
+    if final_plan:
+        max_exp_day = max(run["expiration_date"] for run in final_plan)
+        max_period = max(TOTAL_MONTHS, int(max_exp_day // 30) + 1)
+    else:
+        max_period = TOTAL_MONTHS
+
+    # Section 1: Detailed Production Runs.
+    print_production_runs_detail(final_plan)
+
+    # Section 2: Aggregated Calendar-Based Inventory Summary.
+    print_aggregated_inventory(final_plan, demand, max_period)
+    #################################################################################################
+
+    #################################################################################################
+    batches = assign_batch_codes(final_plan)
+    inventory_by_month, batch_details = simulate_inventory_batches(batches, demand)
+    print_batch_inventory_report(batch_details)
+    #################################################################################################
+
+
+# --- MODIFIED CODE in main() to handle AryoSeven_RC with a separate planner ---
+def main(products_protein_per_month, date, monthCount):
+    print("run with extended schedule (can start before day 0)...")
+    with open("E:\\Sherkat_DeepSpring_projects\\PharmaAI\\Data\\Lines.json", "r") as f:
+        data = json.load(f)
+
+    print(date)
+    base_date = parse_base_date(date)
+    set_base_date_for_planning(base_date)
+
+    set_total_months(monthCount)
+
+    # Build the 'demand' dict as you do
+    demand: dict[str, dict[int, float]] = {}
+    for key, val in products_protein_per_month.items():
+        product_part, idx_str = key.rsplit(" ", 1)
+        m = int(idx_str)
+        base_product = " ".join(product_part.split()[:-1]) or product_part
+        demand.setdefault(base_product, {})
+        demand[base_product][m] = demand[base_product].get(m, 0.0) + float(val)
+
+    # For demonstration, let's keep the logic that redistributes total demand equally across 12 months
+    for product, monthly_demand in demand.items():
+        total_demand = sum(monthly_demand.values())
+        for mm in range(1, TOTAL_MONTHS + 1):
+            demand[product][mm] = total_demand / TOTAL_MONTHS
+
+    print("Demand dict after distribution:\n", demand)
+
+    # If AryoSeven_RC is in the demand, call the specialized planner
+    final_plan_RC, inv_traj_RC = [], {}
+    if "AryoSeven_RC" in demand:
+        final_plan_RC, inv_traj_RC = build_schedule_for_AryoSevenRC(data, demand)
+
+    # Now remove "AryoSeven_RC" from the demand dict so it doesn't go into the normal build_schedule_with_inventory
+    if "AryoSeven_RC" in demand:
+        del demand["AryoSeven_RC"]
+
+    # The rest of products (including AryoSeven_BR) go through the normal build_schedule_with_inventory
+    final_plan, inv_traj = build_schedule_with_inventory(data, demand)
+
+    if not final_plan:
+        print(
+            "No feasible total plan found with extended schedule. Possibly no runs were activated."
+        )
+        return
+    if not final_plan_RC and not final_plan:
+        print(
+            "No feasible plan found for AryoSeven_RC with extended schedule. Possibly no runs were activated."
+        )
+        return
+
+    # Combine results
+    combined_plan = final_plan + final_plan_RC
+    # Combine inventories
+    for k, v in inv_traj_RC.items():
+        inv_traj[k] = v
+
+    Output_Printers(combined_plan, inv_traj, demand)
+    # or build your final payload from combined results
+    payload = {
+        "status": "OK",
+        "final_plan": combined_plan,
+        "inventory_trajectory": inv_traj,
+        "demand": demand,
+    }
+    return payload
+
+
+if __name__ == "__main__":
+    main()
+
+# sample payload for two products:
+# products={'Altebrel': ['25', '50'], 'AryoTrust': ['150', '440']} Min_Stock={'Altebrel': {'25': {1: 8950, 2: 9385, 3: 12876, 4: 9451, 5: 9600, 6: 19624, 7: 9274, 8: 9050, 9: 15262, 10: 9112, 11: 23843, 12: 15568}, '50': {1: 218688, 2: 60889, 3: 58484, 4: 43168, 5: 37964, 6: 57077, 7: 46043, 8: 40567, 9: 58663, 10: 46376, 11: 186941, 12: 221225}}, 'AryoTrust': {'150': {1: 7313, 2: 5343, 3: 5829, 4: 6314, 5: 8846, 6: 6800, 7: 14291, 8: 7286, 9: 14886, 10: 7480, 11: 7480, 12: 8727}, '440': {1: 19468, 2: 6185, 3: 16800, 4: 10715, 5: 17831, 6: 8246, 7: 8762, 8: 19277, 9: 17042, 10: 10308, 11: 19823, 12: 31032}}} Export_Stocks={'Altebrel': {'25': {1: 0, 2: 0, 3: 3900, 4: 0, 5: 0, 6: 10000, 7: 0, 8: 0, 9: 6000, 10: 0, 11: 15000, 12: 6800}, '50': {1: 183000, 2: 24000, 3: 22000, 4: 10000, 5: 1200, 6: 22000, 7: 10000, 8: 2600, 9: 22000, 10: 10000, 11: 150000, 12: 184000}}, 'AryoTrust': {'150': {1: 0, 2: 0, 3: 0, 4: 0, 5: 2240, 6: 0, 7: 7200, 8: 0, 9: 7600, 10: 7480, 11: 0, 12: 1150}, '440': {1: 9894, 2: 0, 3: 6700, 4: 7215, 5: 7731, 6: 0, 7: 0, 8: 9277, 9: 7250, 10: 0, 11: 10823, 12: 11338}}} Sales_Stocks={'Altebrel': {'25': {1: 8950, 2: 9385, 3: 8976, 4: 9451, 5: 9600, 6: 9624, 7: 9274, 8: 9050, 9: 9262, 10: 9112, 11: 8843, 12: 8768}, '50': {1: 35688, 2: 36889, 3: 36484, 4: 33168, 5: 36764, 6: 35077, 7: 36043, 8: 37967, 9: 36663, 10: 36376, 11: 36941, 12: 37225}}, 'AryoTrust': {'150': {1: 7313, 2: 5343, 3: 5829, 4: 6314, 5: 6606, 6: 6800, 7: 7091, 8: 7286, 9: 7286, 10: 0, 11: 7480, 12: 7577}, '440': {1: 9574, 2: 6185, 3: 10100, 4: 3500, 5: 10100, 6: 8246, 7: 8762, 8: 10000, 9: 9792, 10: 10308, 11: 9000, 12: 19694}}} startYear=2026 monthsCount=12 commonBRs=[] dedicatedBRs=[]
