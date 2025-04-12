@@ -1266,10 +1266,10 @@ def build_schedule_with_inventory(
 
     # Solve
     solver = cp_model.CpSolver()
-    solver.parameters.stop_after_first_solution = True
+    # solver.parameters.stop_after_first_solution = True
     solver.parameters.max_time_in_seconds = 100.0
     solver.parameters.log_search_progress = False
-    solver.parameters.num_search_workers = 4
+    solver.parameters.num_search_workers = 2
     status = solver.Solve(model)
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         print("No feasible solution.")
