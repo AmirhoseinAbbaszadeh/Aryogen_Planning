@@ -10,7 +10,25 @@ DAYS_PER_MONTH = 30
 TOTAL_MONTHS = None
 BASE_DATE_FOR_PLANNING = None
 MAX_RUNS = 200  # Maximum number of production runs per product
+bigM = 1_000_000_000
 
+from datetime import datetime
+
+def parse_date_isoformat(date_str: str) -> datetime:
+    """
+    Parse an ISO-like date string, e.g. '2025-04-11T20:30:00.000Z',
+    into a Python datetime object.
+    """
+    # Adjust the format as needed if your string is slightly different
+    # For 'YYYY-MM-DDTHH:MM:SS.000Z', we can do:
+    return datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+
+def parse_date_dd_mm_yyyy(date_str: str) -> datetime:
+    """
+    Parse a date string in 'DD/MM/YYYY' format, e.g. '01/02/2026',
+    into a Python datetime object.
+    """
+    return datetime.strptime(date_str, "%d/%m/%Y")
 
 def set_total_months(new_month_count: int):
     """
@@ -238,6 +256,41 @@ def print_batch_inventory_report(batch_details):
                 print("    No batches available for this month.")
             print("-" * 50)  # Separator for better readability
 
+def build_solver_inputs_from_payload(
+    busyLines: list,
+    selectedDate: str
+):
+    """
+    Returns two dictionaries:
+      - existing_stock: { productName : currentAmount, ... }
+      - lineBusyUntil:  { lineID : dayOffset, ... }
+
+    The dayOffset is the integer (days) from the selectedDate to the line's Finish date.
+    """
+    # 1) Parse the selectedDate as our base for day offsets
+    base_date = parse_date_isoformat(selectedDate)  # e.g. 2025-04-11T20:30:00.000Z
+    
+    # 3) Build lineBusyUntil
+    #    We'll parse "line": "Arylia|2" => lineID = 2. Then parse "Finish": "01/02/2026" => day offset from base_date
+    lineBusyUntil = {}
+    for bline in busyLines:
+        line_str = bline['line']         # e.g. "Arylia|2"
+        finish_str = bline['Finish']     # e.g. "01/02/2026"
+
+        # parse out the line ID (the second part after '|')
+        # "Arylia|2" => splitted = ["Arylia", "2"]
+        splitted = line_str.split('|')
+        l_id = int(splitted[1])  # convert "2" -> 2
+
+        # parse the finish date
+        finish_date = parse_date_dd_mm_yyyy(finish_str)  # e.g. datetime(2026, 2, 1)
+        
+        # compute day offset: how many days from base_date to finish_date
+        day_offset = (finish_date - base_date).days
+        
+        lineBusyUntil[l_id] = day_offset
+    
+    return lineBusyUntil
 
 # --- NEW CODE: A specialized planner for AryoSeven_RC ---
 def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
@@ -277,14 +330,11 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
 
     # 1) Build a minimal CP-SAT or some simpler approach.
     model = cp_model.CpModel()
-    # For simplicity, let's define a small number of runs. Adjust as needed:
-    MAX_RUNS_RC = 100
-    bigM = 10_000_000
 
     # We'll assume each run can produce 3.3 grams. We'll create boolean variables:
     use_run = {}
     finish_time = {}
-    for r in range(MAX_RUNS_RC):
+    for r in range(MAX_RUNS):
         use_run[r] = model.NewBoolVar(f"run_aryoSevenRC_{r}")
         finish_time[r] = model.NewIntVar(0, bigM, f"fin_aryoSevenRC_{r}")
 
@@ -301,25 +351,41 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
 
     # We'll create a chain of runs with no overlap, for example:
     # (In real code, you might do more constraints to handle parallel runs or resource usage.)
-    prev_end = model.NewIntVar(0, bigM, "prev_end_init")
-    model.Add(prev_end == 0)  # Start at day 0
-    for r in range(MAX_RUNS_RC):
-        st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r}")
-        en = finish_time[r]
-        # If run is used => st >= prev_end
-        model.Add(st >= prev_end).OnlyEnforceIf(use_run[r])
-        # If run is not used => st = 0, en = 0
-        model.Add(st == 0).OnlyEnforceIf(use_run[r].Not())
-        model.Add(en == st + run_duration - 1).OnlyEnforceIf(use_run[r])
+    # prev_end = model.NewIntVar(0, bigM, "prev_end_init")
+    # model.Add(prev_end == 0)  # Start at day 0
+    # for r in range(MAX_RUNS):
+    #     st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r}")
+    #     en = finish_time[r]
+    #     # If run is used => st >= prev_end
+    #     model.Add(st >= prev_end).OnlyEnforceIf(use_run[r])
+    #     # If run is not used => st = 0, en = 0
+    #     model.Add(st == 0).OnlyEnforceIf(use_run[r].Not())
+    #     model.Add(en == st + run_duration - 1).OnlyEnforceIf(use_run[r])
 
-        # Link prev_end for the next run:
-        if r < MAX_RUNS_RC - 1:
-            next_st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r + 1}")
-            model.Add(prev_end == en + 1).OnlyEnforceIf(use_run[r])
-            # If run[r] is not used, we keep prev_end the same. So let's do something like:
-            tmp = model.NewIntVar(0, bigM, f"tmp_{r}")
-            model.Add(tmp == prev_end).OnlyEnforceIf(use_run[r].Not())
-            # But to keep it simple, we skip advanced logic here.
+    #     # Link prev_end for the next run:
+    #     if r < MAX_RUNS - 1:
+    #         next_st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r + 1}")
+    #         model.Add(prev_end == en + 1).OnlyEnforceIf(use_run[r])
+    #         # If run[r] is not used, we keep prev_end the same. So let's do something like:
+    #         tmp = model.NewIntVar(0, bigM, f"tmp_{r}")
+    #         model.Add(tmp == prev_end).OnlyEnforceIf(use_run[r].Not())
+    #         # But to keep it simple, we skip advanced logic here.
+    start_vars = {}    # Dictionary to hold independent start times
+    for r in range(MAX_RUNS):
+        use_run[r] = model.NewBoolVar(f"run_aryoSevenRC_{r}")
+        start_vars[r] = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r}")
+        finish_time[r] = model.NewIntVar(0, bigM, f"fin_aryoSevenRC_{r}")
+        # If a run is used, finish_time is set relative to its start
+        model.Add(finish_time[r] == start_vars[r] + run_duration - 1).OnlyEnforceIf(use_run[r])
+        # Otherwise, you can fix start and finish to 0 if not used.
+        model.Add(start_vars[r] == 0).OnlyEnforceIf(use_run[r].Not())
+        model.Add(finish_time[r] == 0).OnlyEnforceIf(use_run[r].Not())
+
+    intervals = []
+    for r in range(MAX_RUNS):
+        interval = model.NewOptionalIntervalVar(start_vars[r], run_duration, finish_time[r], use_run[r], f"interval_aryoSevenRC_{r}")
+        intervals.append(interval)
+    model.AddNoOverlap(intervals)
 
     # 2) Demand constraints, usage variables, etc.
     # For each run => produces 3.3 grams => partial usage across months, expiration, ...
@@ -330,17 +396,17 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
     SHELF_LIFE_RC = 24  # months
     # We map run -> produce_protein = 3.3 * use_run[r]
     produced_protein_run = {}
-    for r in range(MAX_RUNS_RC):
+    for r in range(MAX_RUNS):
         # If run is active => produce 3.3
         # We'll create an IntVar for produced_protein_run. We'll store it as integer scaled by 100 for example if needed
         # For simplicity let's store as an IntVar with an upper bound 4 to store ceil(3.3).
-        produced_protein_run[r] = model.NewIntVar(0, 4, f"protein_run_{r}")
+        produced_protein_run[r] = model.NewIntVar(3, 4, f"protein_run_{r}")
         # enforce produced_protein_run[r] = 3.3 if run is used, else 0
         # We'll do approximate integer approach:
         # 3.3 -> we store as 3.  If you want a real approach, you'd use intervals or linear approx.
         # For a quick approach:
-        model.Add(produced_protein_run[r] == 3).OnlyEnforceIf(use_run[r])
-        model.Add(produced_protein_run[r] == 0).OnlyEnforceIf(use_run[r].Not())
+        # model.Add(produced_protein_run[r] == 3).OnlyEnforceIf(use_run[r])
+        # model.Add(produced_protein_run[r] == 0).OnlyEnforceIf(use_run[r].Not())
 
         # expiration day => finish_time[r] + SHELF_LIFE_RC * 30
         expiration_date[r] = model.NewIntVar(0, bigM, f"exp_run_{r}")
@@ -351,7 +417,7 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
             isValid[(r, m)] = model.NewBoolVar(f"isValid_{r}_{m}")
 
     # Sum usage <= produced
-    for r in range(MAX_RUNS_RC):
+    for r in range(MAX_RUNS):
         model.Add(
             sum(usage[(r, m)] for m in range(1, TOTAL_MONTHS + 1))
             <= produced_protein_run[r]
@@ -361,11 +427,11 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
     # demand["AryoSeven_RC"][m] might exist
     for m in range(1, TOTAL_MONTHS + 1):
         dem_m = int(math.ceil(demand["AryoSeven_RC"].get(m, 0)))
-        model.Add(sum(usage[(r, m)] for r in range(MAX_RUNS_RC)) >= dem_m)
+        model.Add(sum(usage[(r, m)] for r in range(MAX_RUNS)) >= dem_m)
 
     # isValid => run finishes by month end, not expired at month start
     # same approach as your scenario B
-    for r in range(MAX_RUNS_RC):
+    for r in range(MAX_RUNS):
         F = finish_time[r]
         E = expiration_date[r]
         for m in range(1, TOTAL_MONTHS + 1):
@@ -380,14 +446,15 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
     # Minimization: keep it consistent with your logic, or simpler
     # e.g. minimize max finish_time plus sum of active runs
     max_finish = model.NewIntVar(0, bigM, "max_finish_rc")
-    model.AddMaxEquality(max_finish, [finish_time[r] for r in range(MAX_RUNS_RC)])
-    total_runs = model.NewIntVar(0, MAX_RUNS_RC, "total_runs")
-    model.Add(total_runs == sum(use_run[r] for r in range(MAX_RUNS_RC)))
+    model.AddMaxEquality(max_finish, [finish_time[r] for r in range(MAX_RUNS)])
+    total_runs = model.NewIntVar(0, MAX_RUNS, "total_runs")
+    model.Add(total_runs == sum(use_run[r] for r in range(MAX_RUNS)))
 
     # Some objective: minimize max_finish + 1000*total_runs
     model.Minimize(max_finish + 1000 * total_runs)
 
     solver = cp_model.CpSolver()
+    solver.parameters.log_search_progress = True
     solver.parameters.max_time_in_seconds = 100.0
     solver.parameters.num_search_workers = 2
     status = solver.Solve(model)
@@ -397,7 +464,8 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
 
     # Build final_plan_RC
     final_plan_RC = []
-    for r in range(MAX_RUNS_RC):
+    for r in range(MAX_RUNS):
+        print(solver.Value(finish_time[r]))
         if solver.Value(use_run[r]) == 0:
             continue
         fday = solver.Value(finish_time[r])
@@ -426,12 +494,13 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
             }
         )
 
+    print(final_plan_RC)
     # Build inventory from usage
     inv_traj_RC: dict[str, dict[int, int]] = {}
     inv_traj_RC["AryoSeven_RC"] = {}
     current_inv = 0
     for m in range(1, TOTAL_MONTHS + 1):
-        total_prod_m = sum(solver.Value(usage[(r, m)]) for r in range(MAX_RUNS_RC))
+        total_prod_m = sum(solver.Value(usage[(r, m)]) for r in range(MAX_RUNS))
         dem_m = int(math.ceil(demand["AryoSeven_RC"].get(m, 0)))
         current_inv = current_inv + total_prod_m - dem_m
         inv_traj_RC["AryoSeven_RC"][m] = current_inv
@@ -442,10 +511,12 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
 def build_schedule_with_inventory(
     data: dict[str, dict],
     demand: dict[str, dict],
+    products_inventory_protein,
+    payload
 ) -> tuple[list[dict], dict[str, dict]]:
     model = cp_model.CpModel()
-    bigM = 1_000_000_000
 
+    print(products_inventory_protein)
     # 1) Filter relevant products
     all_prods = list(data["Common_Lines"].keys())
     products = [p for p in all_prods if p in demand]
@@ -498,7 +569,9 @@ def build_schedule_with_inventory(
     fu_vars: dict[
         tuple[str, int, str, int, str], tuple[cp_model.IntVar, cp_model.IntVar]
     ] = {}  # (p, r, l_id, br_stage_key, fu_name): (fu_st, fu_en)
+    lineBusyUntil = build_solver_inputs_from_payload(payload.busyLines, payload.selectedDate)
 
+    
     NEGATIVE_BOUND = -180
 
     for p in products:
@@ -529,6 +602,13 @@ def build_schedule_with_inventory(
                 thaw_en = model.NewIntVar(
                     NEGATIVE_BOUND, 50000, f"thaw_{p}_{r}_l{l_id}_0"
                 )
+                
+                if l_id in lineBusyUntil:
+                    # The day offset after which line l_id is free
+                    free_day = lineBusyUntil[l_id]
+                    # Ensure we don't start the thawing stage before line is free
+                    model.Add(thaw_st >= free_day).OnlyEnforceIf(use_line[(p, r, l_id)])
+
                 stage_start[(p, r, l_id, 0)] = thaw_st
                 stage_end[(p, r, l_id, 0)] = thaw_en
                 thaw_interval = model.NewOptionalIntervalVar(
@@ -748,6 +828,7 @@ def build_schedule_with_inventory(
                                 )  # or define a new dict if you prefer
                                 sss_en_prev = sss_en
 
+                        
                         # FOLLOW-UP STAGES.
                         # Handle FU stages, including those with same start dates
                         fu_key = f"Follow_Up_{brn}"
@@ -809,12 +890,27 @@ def build_schedule_with_inventory(
                                 50000,
                                 f"fu_ref_{p}_{r}_l{l_id}_{stage_key}",
                             )
-                            model.Add(
-                                fu_prev_end
-                                == mab_vars[(p, r, l_id, stage_key, mab_idx)][1] + 2
-                            )  # Mab stage ends, FU starts next day
+                            # Instead of directly using mab_idx, we try candidate indices:
+                            found_key = None
+                            max_candidates = 10  # adjust this value as necessary
+                            for idx in range(1, max_candidates + 1):
+                                key_normal = (p, r, l_id, stage_key, idx)
+                                key_ss = (p, r, l_id, stage_key, 1000 + idx)
+                                if key_normal in mab_vars:
+                                    found_key = key_normal
+                                    break
+                                elif key_ss in mab_vars:
+                                    found_key = key_ss
+                                    break
+
+                            if found_key is None:
+                                raise KeyError(f"No Mab or SS stage found for keys with base {(p, r, l_id, stage_key)} up to {max_candidates}")
+
+                            # Use the found reference end time to set fu_prev_end (with your desired offset, here +2)
+                            model.Add(fu_prev_end == mab_vars[found_key][1] + 2)
 
                             for fu_name in fu_stage_order:
+
                                 # 1) Check if fu_name is in any same-start group.
                                 matched_group = None
                                 for same_stages_str, _ in same_start_dict.items():
@@ -823,7 +919,7 @@ def build_schedule_with_inventory(
                                     if fu_name in stages_list:
                                         matched_group = same_stages_str
                                         break
-
+                                
                                 if matched_group is not None:
                                     # === We have a same-start group that includes fu_name ===
                                     stages_to_sync = matched_group.split(" & ")
@@ -847,6 +943,8 @@ def build_schedule_with_inventory(
                                         model.Add(
                                             assigned_start == fu_prev_end
                                         ).OnlyEnforceIf(use_line[(p, r, l_id)])
+
+
 
                                     # Schedule all stages in the group that are not already scheduled.
                                     for stg in stages_to_sync:
@@ -898,7 +996,7 @@ def build_schedule_with_inventory(
 
                                     # Skip further processing for this fu_name (already handled).
                                     continue
-
+                                
                                 # If the stage is already in result, skip it.
                                 if fu_name in result:
                                     continue
@@ -920,6 +1018,8 @@ def build_schedule_with_inventory(
                                         ][1]
                                         + 1
                                     )
+                                
+                                    
                                 # For subsequent stages, enforce overlap if defined.
                                 prev_fu_name = fu_stage_order[idx - 1]
                                 # Look for an overlap definition between prev_fu_name and fu_name.
@@ -953,7 +1053,10 @@ def build_schedule_with_inventory(
                                             use_line[(p, r, l_id)]
                                         )
                                     elif ov_val == "Full":
-                                        # FU stage ends exactly when previous ends.
+                                        # FU stage ends exactly when the previous stage ends (i.e., no gap)
+                                        model.Add(fu_st == fu_prev_end).OnlyEnforceIf(
+                                            use_line[(p, r, l_id)]
+                                        )
                                         model.Add(fu_en == fu_prev_end).OnlyEnforceIf(
                                             use_line[(p, r, l_id)]
                                         )
@@ -967,6 +1070,7 @@ def build_schedule_with_inventory(
                                     model.Add(fu_st == fu_prev_end).OnlyEnforceIf(
                                         use_line[(p, r, l_id)]
                                     )
+                                    
                                 # End time of the current FU stage.
                                 model.Add(
                                     fu_en == fu_st + fu_dict[fu_name] - 1
@@ -1214,6 +1318,15 @@ def build_schedule_with_inventory(
         for m in range(1, TOTAL_MONTHS + 1):
             inventory[(p, m)] = model.NewIntVar(0, bigM, f"Inventory_{p}_m{m}")
 
+    # -- NEW CODE: Set inventory in month 1 to existing stock plus first production minus demand
+    # If you want EXACT month 0 as your initial inventory, do:
+    inventory_month0 = {}
+    for p in products:
+        # create an IntVar for inventory at 'month 0'
+        inventory_month0[p] = model.NewIntVar(0, bigM, f"Inventory_{p}_m0")
+        # set it to the existing stock:
+        model.Add(inventory_month0[p] == products_inventory_protein[f"{p}"])
+
     # We interpret "monthly production" as the sum of usage in that month
     # Because usage = how much product is actually allocated to month m
     monthly_prod = {}
@@ -1237,7 +1350,7 @@ def build_schedule_with_inventory(
             if m == 1:
                 # inventory in month 1 = production in month 1 - demand
                 model.Add(
-                    inventory[(p, m)] == monthly_prod[(p, m)] - monthly_demand[p, m]
+                    inventory[(p, m)] == inventory_month0[p] + monthly_prod[(p, m)] - monthly_demand[p, m]
                 )
             else:
                 model.Add(
@@ -1248,6 +1361,16 @@ def build_schedule_with_inventory(
                 )
             # Nonnegative
             model.Add(inventory[(p, m)] >= 0)
+    
+    min_stock = payload.Min_Stock
+    print("-----------\n",min_stock)
+    # Suppose min_stock[p][m] = X means you want inventory of product p in month m >= X
+    for p in products:
+        for m in range(1, TOTAL_MONTHS + 1):
+            required_min = min_stock.get(p, {}).get(m, 0)
+            if required_min > 0:
+                model.Add(inventory[(p, m)] >= required_min)
+
 
     # 4) MAKESPAN + PRODUCTION OBJECTIVE
     all_finish = [finish_time[(p, r)] for p in products for r in range(MAX_RUNS)]
@@ -1267,58 +1390,27 @@ def build_schedule_with_inventory(
     # Solve
     solver = cp_model.CpSolver()
     # solver.parameters.stop_after_first_solution = True
-    solver.parameters.max_time_in_seconds = 100.0
+    solver.parameters.max_time_in_seconds = 900
+    solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
+    solver.parameters.symmetry_level = 2  # Enables symmetry breaking during preprocessing
     solver.parameters.log_search_progress = False
-    solver.parameters.num_search_workers = 2
+    solver.parameters.num_search_workers = 8
+    solver.parameters.use_lns = True  # Enable Large Neighborhood Search
     status = solver.Solve(model)
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         print("No feasible solution.")
         return [], {}
 
-        # Add debug output to verify expiration months
     print("\n=== Expiration Month Verification ===")
     for p in products:
         print(f"\nProduct: {p}")
         for r in range(MAX_RUNS):
             if solver.Value(isValid[(p, r, m)]):
                 exp_day = solver.Value(expiration_date[(p, r)])
-                exp_month = None
                 print(f"Run {r}:")
                 print(f"  Expiration day: {exp_day}")
                 print(f"  Should be in month: {(exp_day // 30) + 1}")
-                print(f"  Current expiration month: {exp_month}")
                 print("  ---")
-
-    for p in products:
-        print(f"\nProduct: {p}")
-        for r in range(MAX_RUNS):
-            for m in range(1, TOTAL_MONTHS + 1):
-                if solver.Value(isValid[(p, r, m)]):
-                    # Get run information
-                    fday = solver.Value(finish_time[(p, r)])
-                    exp_day = solver.Value(expiration_date[(p, r)])
-                    finish_date_str = day_to_date(fday)
-                    exp_date_str = day_to_date(exp_day)
-                    exp_day = solver.Value(expiration_date[(p, r)])
-
-                    # Find which month this run expires in
-                    # exp_month = None
-                    # for m in range(1, TOTAL_MONTHS + 1):
-                    #     print(f"  b_run_expires_month: {solver.Value(b_run_expires_month[(p, r, m)])}")
-                    #     if solver.Value(b_run_expires_month[(p, r, m)]) == 1 and solver.Value(activate_run[(p, r)]) == 1:
-                    #         exp_month = m
-                    #         break
-
-                    print(f"Run {r}:")
-                    print(f"  Finish Date: {finish_date_str}")
-                    print(f"  Finish day: {fday}")
-                    print(f"  Expiration day: {exp_day}")
-                    print(f"  Expiration Date: {exp_date_str}")
-                    print(f"  Expires in Month: {exp_month}")
-                    print(
-                        f"  Produced Protein: {solver.Value(produced_protein_int[(p, r)])}"
-                    )
-                    print("  ---")
 
     # 7) Build final plan (updated for partial usage / Scenario B)
     final_plan = []
@@ -1518,7 +1610,11 @@ def build_schedule_with_inventory(
     inv_traj: dict[str, dict[int, int]] = {}
     for p in products:
         inv_traj[p] = {}
-        current_inv = 0
+        # Instead of 0, set current_inv to the existing stock for p
+        # e.g. if your existing stock is stored in a dict existing_stock[p]
+        # or if you store it as inventory_month0 in the solver, you can read that value here.
+        initial_stock = products_inventory_protein[f"{p}"]  # or solver.Value(inventory_month0[p]) if that is an IntVar
+        current_inv = initial_stock
         for m in range(1, TOTAL_MONTHS + 1):
             # Sum the production allocated to product p in period m over all runs.
             # Here, usage[(p, r, m)] is the CP variable from which we get the solver’s value.
@@ -1530,7 +1626,7 @@ def build_schedule_with_inventory(
             # current_inv = previous_inv + production in m - demand in m
             current_inv = current_inv + monthly_production - monthly_demand
             inv_traj[p][m] = current_inv
-
+    print(inv_traj)
     return final_plan, inv_traj
 
 
@@ -1538,7 +1634,7 @@ def build_schedule_with_inventory(
 
 
 # --- Compute Inventory per Period Considering Shelf Life ---
-def compute_inventory_by_period(final_plan, max_period):
+def compute_inventory_by_period(final_plan, max_period, products_inventory_protein):
     """
     For each production run in final_plan, compute the available (non–expired) protein
     at the end of each period, using whole–unit expiration.
@@ -1564,6 +1660,8 @@ def compute_inventory_by_period(final_plan, max_period):
         ]  # computed as finish_day + SHELF_LIFE * DAYS_PER_MONTH
         # Loop over each period.
         for m in range(1, max_period + 1):
+            if m == 1:
+                produced += products_inventory_protein.get(prod, 0)
             # Define period boundaries.
             period_start = (m - 1) * 30
             period_end = m * 30 - 1
@@ -1654,7 +1752,7 @@ def print_production_runs_detail(final_plan):
 
 
 # --- Aggregated Calendar-Based Inventory Summary ---
-def print_aggregated_inventory(final_plan, demand, max_period):
+def print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein):
     """
     Print an aggregated, calendar-based inventory table per product.
     For each period (calculated as 30–day blocks using day_to_date),
@@ -1669,8 +1767,7 @@ def print_aggregated_inventory(final_plan, demand, max_period):
     """
     # Assume new_prod is computed as before:
     new_prod = compute_new_prod(final_plan, max_period)
-    inv_by_period = compute_inventory_by_period(final_plan, max_period)
-
+    inv_by_period = compute_inventory_by_period(final_plan, max_period, products_inventory_protein)
     print("\n=== Aggregated Calendar-Based Inventory Summary ===")
     for prod in sorted(demand.keys()):
         print(f"\nProduct: {prod}")
@@ -1683,7 +1780,7 @@ def print_aggregated_inventory(final_plan, demand, max_period):
             period_label = f"{period_start_date} - {period_end_date}"
             dem_val = int(math.ceil(demand[prod].get(m, 0)))
             np_val = new_prod.get(prod, {}).get(m, 0)
-            inv_start = inv_by_period[prod].get(m - 1, 0) if m > 1 else 0.0
+            inv_start = inv_by_period[prod].get(m - 1, 0)
             inv_end = inv_by_period[prod].get(m, 0)
             balance = (inv_start + np_val) - dem_val
             balance_text = (
@@ -1829,7 +1926,7 @@ def add_bioreactor_preparation_stages(final_plan):
     return updated_plan
 
 
-def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand) -> None:
+def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein) -> None:
     #################################################################################################
     # print("\n=== FINAL PRODUCTION RUNS ===")
     # for row in final_plan:
@@ -1877,7 +1974,7 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand) -
     print_production_runs_detail(final_plan)
 
     # Section 2: Aggregated Calendar-Based Inventory Summary.
-    print_aggregated_inventory(final_plan, demand, max_period)
+    print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
     #################################################################################################
 
     #################################################################################################
@@ -1888,16 +1985,14 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand) -
 
 
 # --- MODIFIED CODE in main() to handle AryoSeven_RC with a separate planner ---
-def main(products_protein_per_month, date, monthCount):
+def main(products_protein_per_month, products_inventory_protein, payload):
     print("run with extended schedule (can start before day 0)...")
     with open("E:\\Sherkat_DeepSpring_projects\\PharmaAI\\Data\\Lines.json", "r") as f:
         data = json.load(f)
-
-    print(date)
-    base_date = parse_base_date(date)
+    
+    base_date = parse_base_date(payload.selectedDate)
     set_base_date_for_planning(base_date)
-
-    set_total_months(monthCount)
+    set_total_months(payload.monthsCount)
 
     # Build the 'demand' dict as you do
     demand: dict[str, dict[int, float]] = {}
@@ -1913,9 +2008,11 @@ def main(products_protein_per_month, date, monthCount):
         total_demand = sum(monthly_demand.values())
         for mm in range(1, TOTAL_MONTHS + 1):
             demand[product][mm] = total_demand / TOTAL_MONTHS
+            demand[product][mm] = demand[product][mm] + (3 * demand[product][mm])
+            
 
     print("Demand dict after distribution:\n", demand)
-
+    
     # If AryoSeven_RC is in the demand, call the specialized planner
     final_plan_RC, inv_traj_RC = [], {}
     if "AryoSeven_RC" in demand:
@@ -1926,18 +2023,17 @@ def main(products_protein_per_month, date, monthCount):
         del demand["AryoSeven_RC"]
 
     # The rest of products (including AryoSeven_BR) go through the normal build_schedule_with_inventory
-    final_plan, inv_traj = build_schedule_with_inventory(data, demand)
+    final_plan, inv_traj = build_schedule_with_inventory(data, demand, products_inventory_protein, payload)
 
     if not final_plan:
         print(
             "No feasible total plan found with extended schedule. Possibly no runs were activated."
         )
-        return
+        
     if not final_plan_RC and not final_plan:
         print(
             "No feasible plan found for AryoSeven_RC with extended schedule. Possibly no runs were activated."
         )
-        return
 
     # Combine results
     combined_plan = final_plan + final_plan_RC
@@ -1945,7 +2041,7 @@ def main(products_protein_per_month, date, monthCount):
     for k, v in inv_traj_RC.items():
         inv_traj[k] = v
 
-    Output_Printers(combined_plan, inv_traj, demand)
+    Output_Printers(combined_plan, inv_traj, demand, products_inventory_protein)
     # or build your final payload from combined results
     payload = {
         "status": "OK",
@@ -1958,6 +2054,3 @@ def main(products_protein_per_month, date, monthCount):
 
 if __name__ == "__main__":
     main()
-
-# sample payload for two products:
-# products={'Altebrel': ['25', '50'], 'AryoTrust': ['150', '440']} Min_Stock={'Altebrel': {'25': {1: 8950, 2: 9385, 3: 12876, 4: 9451, 5: 9600, 6: 19624, 7: 9274, 8: 9050, 9: 15262, 10: 9112, 11: 23843, 12: 15568}, '50': {1: 218688, 2: 60889, 3: 58484, 4: 43168, 5: 37964, 6: 57077, 7: 46043, 8: 40567, 9: 58663, 10: 46376, 11: 186941, 12: 221225}}, 'AryoTrust': {'150': {1: 7313, 2: 5343, 3: 5829, 4: 6314, 5: 8846, 6: 6800, 7: 14291, 8: 7286, 9: 14886, 10: 7480, 11: 7480, 12: 8727}, '440': {1: 19468, 2: 6185, 3: 16800, 4: 10715, 5: 17831, 6: 8246, 7: 8762, 8: 19277, 9: 17042, 10: 10308, 11: 19823, 12: 31032}}} Export_Stocks={'Altebrel': {'25': {1: 0, 2: 0, 3: 3900, 4: 0, 5: 0, 6: 10000, 7: 0, 8: 0, 9: 6000, 10: 0, 11: 15000, 12: 6800}, '50': {1: 183000, 2: 24000, 3: 22000, 4: 10000, 5: 1200, 6: 22000, 7: 10000, 8: 2600, 9: 22000, 10: 10000, 11: 150000, 12: 184000}}, 'AryoTrust': {'150': {1: 0, 2: 0, 3: 0, 4: 0, 5: 2240, 6: 0, 7: 7200, 8: 0, 9: 7600, 10: 7480, 11: 0, 12: 1150}, '440': {1: 9894, 2: 0, 3: 6700, 4: 7215, 5: 7731, 6: 0, 7: 0, 8: 9277, 9: 7250, 10: 0, 11: 10823, 12: 11338}}} Sales_Stocks={'Altebrel': {'25': {1: 8950, 2: 9385, 3: 8976, 4: 9451, 5: 9600, 6: 9624, 7: 9274, 8: 9050, 9: 9262, 10: 9112, 11: 8843, 12: 8768}, '50': {1: 35688, 2: 36889, 3: 36484, 4: 33168, 5: 36764, 6: 35077, 7: 36043, 8: 37967, 9: 36663, 10: 36376, 11: 36941, 12: 37225}}, 'AryoTrust': {'150': {1: 7313, 2: 5343, 3: 5829, 4: 6314, 5: 6606, 6: 6800, 7: 7091, 8: 7286, 9: 7286, 10: 0, 11: 7480, 12: 7577}, '440': {1: 9574, 2: 6185, 3: 10100, 4: 3500, 5: 10100, 6: 8246, 7: 8762, 8: 10000, 9: 9792, 10: 10308, 11: 9000, 12: 19694}}} startYear=2026 monthsCount=12 commonBRs=[] dedicatedBRs=[]

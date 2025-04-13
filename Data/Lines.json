@@ -300,6 +300,62 @@
             ]
         }
     ],
+    "Coageight": [
+        {
+            "Protein_per_1000L_BR": 55,
+            "Cell_Thawing & SF": 14,
+            "Harvest": 1,
+            "Hold":0
+        },
+        {
+            "lines": [
+                {
+                    "id": 2,
+                    "BRs": {
+                        "10": 4,
+                        "50": 4,
+                        "250": 14
+                    },
+                    "Overlaps": {
+                        "50 & 10": 1,
+                        "50 & 250": 1
+                    },
+                    "N_Harvest": 1,
+                    "Follow_Up_1000": {
+                        "ES 1": 1,
+                        "ES 2": 1,
+                        "250_QC_Test": 2,
+                        "Q/SE 1 ": 1,
+                        "Q/SE 2 ": 1,
+                        "Q/SE 3 ": 1,
+                        "Q/SE 4 ": 1,
+                        "Q/SE 5 ": 1,
+                        "Q/SE_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Lyophilization": 3,
+                        "Capping": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_1000_SameStarts": {
+                        "Filling & Lyophilization": 1,
+                        "DP_QC_Test & Visual Insp.": 1
+                    },
+                    "Follow_Up_1000_Overlaps": {
+                        "Lyophilization & Capping": "Full"
+                    },
+                    "status": "active"
+                }
+            ]
+        }
+    ],
     "Stivant": [
         {
             "Protein_per_1000L_BR": 1300,

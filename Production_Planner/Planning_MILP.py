@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import math
 
 # import re
 from datetime import datetime
@@ -51,44 +52,12 @@ app.add_middleware(
 #     selectedDate: Optional[str] = None   # New field for the date
 
 
-class CurrentStock(BaseModel):
-    """
-    Represents the current stock of a product in the inventory.
-
-    Attributes:
-        productDose (str): The dosage or variant of the product.
-        amount (int): The quantity of the product available in stock.
-        Date (Optional[str]): The date associated with the stock entry (e.g., manufacturing or stock entry date). Defaults to None.
-        Expiration (Optional[str]): The expiration date of the product. Defaults to None.
-
-    """
-
-    productDose: str
-    amount: int
-    Date: Optional[str] = None
-    Expiration: Optional[str] = None
-
-
-class BusyLine(BaseModel):
-    """
-    Represents a production line that is currently busy, along with optional scheduling details.
-
-    Attributes:
-        line (str): The name or identifier of the production line.
-        Date (Optional[str]): The date associated with the busy line, if applicable. Defaults to None.
-        Finish (Optional[str]): The finish time or date for the busy line, if applicable. Defaults to None.
-
-    """
-
-    line: str
-    Date: Optional[str] = None
-    Finish: Optional[str] = None
-
+from typing import Optional, Dict, List, Any
+from pydantic import BaseModel
 
 class PlanPayload(BaseModel):
     """
-    Updated payload structure without startYear.
-    Example payload structure:
+    Updated payload structure without custom classes. Example payload:
     {
       "products": { ... },
       "Min_Stock": { ... },
@@ -97,26 +66,31 @@ class PlanPayload(BaseModel):
       "monthsCount": 12,
       "commonBRs": [ ... ],
       "dedicatedBRs": [ ... ],
-      "selectedDate": "25/12/2025",
+      "selectedDate": "2025-04-11T20:30:00.000Z",
       "currentStocks": [
          {
            "productDose": "Altebrel|25",
-           "amount": 120,
-           "Date": "25/12/2025",
-           "Expiration": "02/03/2026"
+           "amount": 4845,
+           "Date": "2025-04-11T20:30:00.000Z",
+           "Expiration": "28/11/2025"
+         },
+         {
+           "productDose": "Arylia|60",
+           "amount": 654,
+           "Date": "2025-04-11T20:30:00.000Z",
+           "Expiration": "31/08/2025"
          }
       ],
       "busyLines": [
          {
-           "line": "Altebrel|1",
-           "Date": "25/12/2025",
-           "Finish": "04/02/2026"
+           "line": "Altebrel|2",
+           "Date": "2025-04-11T20:30:00.000Z",
+           "Finish": "27/06/2025"
          }
       ]
     }
     """
-
-    products: Dict[str, List[str]]  # product -> list of dose strings
+    products: Dict[str, List[str]]
     Min_Stock: Dict[str, Dict[str, Dict[int, int]]]
     Export_Stocks: Dict[str, Dict[str, Dict[int, int]]]
     Sales_Stocks: Dict[str, Dict[str, Dict[int, int]]]
@@ -124,8 +98,9 @@ class PlanPayload(BaseModel):
     commonBRs: List[Dict[str, Any]]
     dedicatedBRs: List[Dict[str, Any]]
     selectedDate: Optional[str] = None
-    currentStocks: Optional[List[CurrentStock]] = None
-    busyLines: Optional[List[BusyLine]] = None
+    currentStocks: Optional[List[dict]] = None
+    busyLines: Optional[List[dict]] = None
+
 
 
 def _search_dose(prdct: str, x_dose: float) -> float:
@@ -144,12 +119,14 @@ def _search_dose(prdct: str, x_dose: float) -> float:
 
     """
     df_parameters = pd.read_excel(
-        r"E:\Sherkat_DeepSpring_projects\PharmaAI\Data\Products parameters AI.xlsx"
+        r"E:\\Sherkat_DeepSpring_projects\\Aryogen_Planning\\Data\\Products parameters AI.xlsx"
     )
     df_parameters = df_parameters.ffill()
 
-    if prdct == "AryoSeven":
+    if prdct == "AryoSeven_BR":
         prdct = "AryoSeven BR"
+    if prdct == "AryoSeven_RC":
+        prdct = "AryoSeven RC"
 
     subset = df_parameters.loc[
         (df_parameters["Product name"] == prdct) & (df_parameters["Dose"] == x_dose)
@@ -305,8 +282,33 @@ def Products_Protein(
             - Schedule: the production schedule from the MILP solver
 
     """
+    """
+    Build a dictionary mapping product names to the initial stock amount.
+    For example, if currentStocks is a list of objects or dictionaries that contain
+    a field 'productDose' (like "Altebrel|25") and an 'amount', this function
+    returns { "Altebrel": initial_amount, ... }.
+    Adjust splitting logic as needed.
+    """
     products_protein = {}
     products_protein_per_month = {}
+    products_inventory_protein = {}
+    init_stock = {}
+    stock_amount = 0
+    
+    for stock in payload.currentStocks:
+        # if stock is a dict, use stock['productDose'] and stock['amount']
+        prod_dose = stock['productDose']  # e.g. "Altebrel|25"
+        amount = float(stock['amount'])
+        # Split the product name if needed, here we assume product name is before '|'
+        product = prod_dose.split("|")[0]
+        dose = prod_dose.split("|")[1]
+        init_stock[f"{product} {dose}"] = init_stock.get(product, 0) + amount
+    
+    for prdct, doses_dict in payload.Min_Stock.items():
+        products_inventory_protein[f"{prdct}"] = 0
+        
+    # print(init_stock)
+    
     for prdct, doses_dict in payload.Min_Stock.items():
         dose_need_protein = 0
         for x_dose, month_demand in doses_dict.items():
@@ -320,27 +322,19 @@ def Products_Protein(
                 num = f"{num:.2f}"
                 products_protein_per_month[f"{prdct} {x_dose} {month[0]}"] = float(num)
 
+            for prodct, stock_amount in init_stock.items():
+                if prodct == f"{prdct} {numeric_dose}":
+                    stock_amount = stock_amount * mg_per_container * 0.001
+                    products_inventory_protein[f"{prdct}"] = products_inventory_protein[f"{prdct}"] + int(math.ceil(stock_amount))
+                    continue
+            
         products_protein[prdct] = dose_need_protein
 
-    # Optionally, you can fill Gantt data here if needed:
-    # filling_Gantt_Demands_values(payload, months_list)
+    # print(products_inventory_protein)
 
-    # products_batches = find_products_batch_sizes(payload)
-
-    # products_protein_range_grams = {}
-    # for product, ranges in products_batches.items():
-    #     mg_value = float(product.split()[1])
-    #     if mg_value.is_integer():
-    #         mg_value = int(mg_value)
-    #     computed_ranges = []
-    #     for low, high in ranges:
-    #         converted_low = int(mg_value * low / 1000)
-    #         converted_high = int(mg_value * high / 1000)
-    #         computed_ranges.append((converted_low, converted_high))
-    #     products_protein_range_grams[product] = computed_ranges
 
     Schedule = MILP_Solver.main(
-        products_protein_per_month, payload.selectedDate, payload.monthsCount
+        products_protein_per_month, products_inventory_protein, payload
     )
     return products_protein, products_protein_per_month, Schedule
 
@@ -489,7 +483,7 @@ async def get_lines() -> Dict[str, Any]:
     """
     try:
         with open(
-            r"E:\Sherkat_DeepSpring_projects\PharmaAI\Data\Lines.json", "r"
+            r"E:\\Sherkat_DeepSpring_projects\\Aryogen_Planning\\Data\\Lines.json", "r"
         ) as file:
             data = json.load(file)
         return data

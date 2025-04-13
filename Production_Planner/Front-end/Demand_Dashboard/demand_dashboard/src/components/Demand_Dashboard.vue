@@ -90,23 +90,6 @@
         </div>
       </div>
 
-      <!-- 2) INVENTORY & EXPIRATION -->
-      <div v-if="selectedSection === 'inventoryExpiration'">
-        <div class="card">
-          <h2>Inventory & Expiration</h2>
-          <div v-for="(item, index) in inventoryData" :key="index" class="inventory-entry">
-            <label>Product Name:</label>
-            <input type="text" v-model="item.product" placeholder="Product Name" />
-            <label>Inventory Quantity:</label>
-            <input type="number" v-model.number="item.quantity" placeholder="Quantity" />
-            <label>Expiration Date:</label>
-            <datepicker v-model="item.expirationDate" :format="customFormat"></datepicker>
-            <button type="button" class="remove-btn small" @click="removeInventory(index)">Remove</button>
-          </div>
-          <button type="button" class="add-btn" @click="addInventory">+ Add Inventory Entry</button>
-        </div>
-      </div>
-
       <!-- 3) CURRENT STOCK -->
       <div v-if="selectedSection === 'currentStock'">
         <div class="card">
@@ -144,7 +127,7 @@
             <input type="number" v-model.number="entry.expirationOffsetDays" placeholder="Enter offset in days" />
             
             <div class="calculated-expiration">
-              <strong>Calculated Expiration Date:</strong>
+              <strong>Calculated Expiration Date => &nbsp;</strong>
               <span>
                 {{ calculateExpiration(selectedDate, entry.expirationOffsetMonths, entry.expirationOffsetDays) || 'N/A' }}
               </span>
@@ -169,12 +152,15 @@
               {{ option.label }}
             </option>
           </select>
-          <label>Finish Offset (months):</label>
-          <input type="number" v-model.number="entry.finishOffsetMonths" placeholder="Offset months" />
-          <label>Finish Offset (days):</label>
-          <input type="number" v-model.number="entry.finishOffsetDays" placeholder="Offset days" />
+
+            <label>Finish Offset (months):</label>
+            <input type="number" v-model.number="entry.finishOffsetMonths" placeholder="Offset months" />
+
+            <label>Finish Offset (days):</label>
+            <input type="number" v-model.number="entry.finishOffsetDays" placeholder="Offset days" />
+
           <div class="calculated-finish">
-            <strong>Calculated Finish Date:</strong>
+            <strong>Calculated Finish Date => &nbsp;</strong>
             <span>
               {{ calculateFinishDate(selectedDate, entry.finishOffsetMonths, entry.finishOffsetDays) || 'N/A' }}
             </span>
@@ -322,7 +308,7 @@ export default {
           ],
         },
         {
-          name: "AryoSeven_RC",
+          name: "AryoSeven_RC ( NOT AVAILABLE YET )",
           doses: [
             {
               name: "1.2",
@@ -382,7 +368,7 @@ export default {
           ],
         },
         {
-          name: "VedAryo",
+          name: "VedAryo ( NOT AVAILABLE YET )",
           doses: [
             {
               name: "300",
@@ -392,7 +378,7 @@ export default {
           ],
         },
         {
-          name: "Temziva",
+          name: "Temziva ( NOT AVAILABLE YET )",
           doses: [
             {
               name: "200",
@@ -504,7 +490,8 @@ export default {
       this.currentStocks.push({
         productDose: "",
         amount: 0,
-        expirationOffset: 0, // User enters number of months offset
+        expirationOffsetMonths: 0, // User enters number of months offset
+        expirationOffsetDays: 0, // User enters number of months offset
       });
     },
     removeCurrentStock(index) {
@@ -521,7 +508,7 @@ export default {
     removeBusyLine(index) {
       this.busyLines.splice(index, 1);
     },
-    // Calculate expiration date by adding offset months and days to baseDate.
+
     calculateExpiration(baseDate, offsetMonths, offsetDays) {
       if (!baseDate || isNaN(offsetMonths) || isNaN(offsetDays)) return "";
       const dateObj = new Date(baseDate);
@@ -585,7 +572,7 @@ export default {
           productDose: entry.productDose,
           amount: entry.amount,
           Date: this.selectedDate,
-          Expiration: this.calculateExpiration(this.selectedDate, entry.expirationOffset, entry.expirationOffsetDays),
+          Expiration: this.calculateExpiration(this.selectedDate, entry.expirationOffsetMonths, entry.expirationOffsetDays),
         }));
 
         // Build busyLines payload with computed finish date.
