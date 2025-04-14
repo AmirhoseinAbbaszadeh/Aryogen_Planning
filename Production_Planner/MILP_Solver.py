@@ -5,6 +5,9 @@ from collections import deque
 from datetime import date, datetime, timedelta
 from ortools.sat.python import cp_model
 
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
 SHELF_LIFE = 24  # Shelf life in months
 DAYS_PER_MONTH = 30
 TOTAL_MONTHS = None
@@ -1629,6 +1632,104 @@ def build_schedule_with_inventory(
     print(inv_traj)
     return final_plan, inv_traj
 
+def run_feasibility_model(data: dict[str, dict], demand: dict[str, dict]) -> dict[str, float]:
+    """
+    Builds a simplified CP-SAT model that determines the maximum production capacity
+    of each product (ignoring demand constraints) in the planning horizon.
+    Returns a dictionary of feasible capacity for each product.
+    """
+    model = cp_model.CpModel()
+    # Use a smaller number of runs for the feasibility phase if desired:
+    FEAS_MAX_RUNS = 100
+
+    # We reuse some basic configuration parts (for example product_lines, factors, etc.)
+    all_prods = list(data["Common_Lines"].keys())
+    products = [p for p in all_prods if p in demand]
+    product_lines = {}
+    product_factor = {}
+    base_configs = {}
+    for p in products:
+        conf_list = data[p]
+        base_conf = conf_list[0]
+        base_configs[p] = base_conf
+        lines_conf = conf_list[1]
+        factor = base_conf.get("Protein_per_1000L_BR", 0.0)
+        product_factor[p] = factor
+        if "lines" in lines_conf:
+            lines_list = lines_conf["lines"]
+        else:
+            lines_list = lines_conf.get("RC", [])
+        active_lines = {}
+        for li in lines_list:
+            if li.get("status") == "active":
+                active_lines[li["id"]] = li
+        product_lines[p] = active_lines
+
+    # Create dummy decision variables for production runs. (We mimic the main model without the demand constraints)
+    produced_protein_int = {}
+    finish_time = {}
+    # For each product and each run, create a variable for produced protein.
+    for p in products:
+        for r in range(FEAS_MAX_RUNS):
+            # You can assume that a run, if activated, produces what the base configuration indicates.
+            # For simplicity, let’s assume each run produces at most 1000 units (scaled factor) and 
+            # we let the production be an IntVar.
+            produced_protein_int[(p, r)] = model.NewIntVar(0, 10_000, f"prod_{p}_{r}")
+            # Also create a finish time variable (our objective here is to maximize total produced protein)
+            finish_time[(p, r)] = model.NewIntVar(0, 50000, f"finish_{p}_{r}")
+            # (In a full model you’d add production chain constraints.)
+            # Here we set an artificial relation for a used run:
+            model.Add(produced_protein_int[(p, r)] >= 0)
+
+    # For the feasibility phase, simply maximize total production summed over runs for each product.
+    total_production = {}
+    for p in products:
+        total_production[p] = model.NewIntVar(0, 1_000_000, f"total_production_{p}")
+        model.Add(total_production[p] == sum(produced_protein_int[(p, r)] for r in range(FEAS_MAX_RUNS)))
+    # Our objective: maximize the total production for each product
+    model.Maximize(sum(total_production[p] for p in products))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 60.0
+    status = solver.Solve(model)
+    feasible_capacity = {}
+    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        for p in products:
+            feasible_capacity[p] = solver.Value(total_production[p])
+    else:
+        print("Feasibility model could not find a solution.")
+        for p in products:
+            feasible_capacity[p] = 0
+    return feasible_capacity
+
+def compute_monthly_demand_differences(original_demand: dict[str, dict], model_capacity: dict[str, dict[int, int]]) -> dict[str, dict[int, int]]:
+    """
+    Compares each month's demand from original_demand with the inventory model's capacity (model_capacity)
+    and returns, for each product and month, the difference.
+    model_capacity is assumed to be a dictionary in which model_capacity[p][m] is the total produced 
+    and allocated production (available) for product p in month m.
+    Returns a nested dictionary { product: {month: difference, ...}, ... }.
+    """
+    monthly_diff = {}
+    for p, months in original_demand.items():
+        monthly_diff[p] = {}
+        
+        # Check if model_capacity[p] is a dictionary (month-wise breakdown)
+        if isinstance(model_capacity.get(p), dict):
+            # Correct case: model_capacity[p] is a dictionary with month keys
+            for m, demand in months.items():
+                capacity = model_capacity[p].get(m, 0)  # Get the capacity for month m
+                monthly_diff[p][m] = demand - capacity  # if positive, there is a shortfall
+        else:
+            # If model_capacity[p] is not a dictionary, it could be a total capacity
+            total_capacity = model_capacity.get(p, 0)
+            for m, demand in months.items():
+                # Divide the total capacity equally across months or use another method
+                # Here, we assume even distribution of total_capacity across months
+                monthly_capacity = total_capacity / len(months)  # Simple even distribution
+                monthly_diff[p][m] = demand - monthly_capacity  # Demand minus the computed monthly capacity
+
+    return monthly_diff
 
 ############################################################################################################################
 
@@ -1794,6 +1895,7 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
             print(
                 f"{period_label:<30} {dem_val:>10} {np_val:>10.2f} {inv_start:>10.2f} {inv_end:>10.2f} {balance_text:>20} {inv_end:>10.2f} {expired:>10.2f}"
             )
+    print("\n=== End of Inventory Summary ===")
 
 
 def print_plan_with_preparation_stages(updated_plan):
@@ -1926,6 +2028,28 @@ def add_bioreactor_preparation_stages(final_plan):
     return updated_plan
 
 
+def list_of_dicts_to_pdf(data, filename):
+    c = canvas.Canvas(filename, pagesize=letter)
+    width, height = letter
+
+    # Set starting position
+    y_position = height - 40
+
+    # Write each dictionary in the list to the PDF
+    for index, dictionary in enumerate(data):
+        if y_position < 40:  # Check if we need to create a new page
+            c.showPage()
+            y_position = height - 40  # Reset position for new page
+
+        c.drawString(100, y_position, f"Record {index + 1}:")
+        y_position -= 20  # Move down for the next line
+
+        for key, value in dictionary.items():
+            c.drawString(120, y_position, f"{key}: {value}")
+            y_position -= 20  # Move down for the next line
+
+    c.save()
+
 def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein) -> None:
     #################################################################################################
     # print("\n=== FINAL PRODUCTION RUNS ===")
@@ -1970,6 +2094,10 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
     else:
         max_period = TOTAL_MONTHS
 
+    
+    # Convert list of dictionaries to PDF
+    list_of_dicts_to_pdf(final_plan, "E:\Sherkat_DeepSpring_projects\Aryogen_Planning\Data\output.pdf")
+    
     # Section 1: Detailed Production Runs.
     print_production_runs_detail(final_plan)
 
@@ -2022,8 +2150,57 @@ def main(products_protein_per_month, products_inventory_protein, payload):
     if "AryoSeven_RC" in demand:
         del demand["AryoSeven_RC"]
 
+    # Run the feasibility model to extract the maximum production capacities.
+    feasible_capacity = run_feasibility_model(data, demand)
+    print("Feasible production capacity per product:", feasible_capacity)
+
+    # Compute the differences between original (or redistributed) demand and feasible capacity.
+    demand_gap = compute_monthly_demand_differences(demand, feasible_capacity)
+    print("Demand gaps (original demand - feasible capacity):", demand_gap)
+
+    # Assuming 'demand_gaps' is the dictionary containing demand gaps (calculated previously)
+    # Example structure of demand_gaps (this is a sample, adjust as per your actual data):
+    # demand_gaps = {
+    #    'Product1': {1: -100, 2: 200, 3: 0},  # negative gap in month 1 and 3, positive gap in month 2
+    #    'Product2': {1: 50, 2: -150, 3: -50}, # positive gap in month 1, negative in month 2 and 3
+    # }
+
+    positive_demand_gaps = {}  # Dictionary to store products with positive gaps
+
+    # Loop through the demand gaps and filter for positive gaps
+    for product, monthly_gaps in demand_gap.items():
+        positive_months = {}  # Store months with positive gaps for this product
+        
+        for month, gap in monthly_gaps.items():
+            if gap > 0:  # If the gap is positive, store it in the positive_months dictionary
+                positive_months[month] = gap
+        
+        if positive_months:  # Only add to the result if there are positive gaps for this product
+            positive_demand_gaps[product] = positive_months
+
+    # Now, print the positive demand gaps
+    print("Products with positive gaps and their monthly differences:")
+
+    for product, months in positive_demand_gaps.items():
+        print(f"Product: {product}")
+        for month, gap in months.items():
+            print(f"  Month {month}: Gap = {gap:.2f}")
+        print()  # New line between products
+
+
+    # Optionally, adjust the demand if required. For instance, scale down if gap is too high:
+    adjusted_demand = {}
+    for p in demand.keys():
+        total_demand = sum(demand[p].values())
+        capacity = feasible_capacity.get(p, total_demand)
+        # Calculate the scaling factor, ensuring it is no greater than 1.0:
+        scale_factor = min(1.0, capacity / total_demand) if total_demand > 0 else 1.0
+        adjusted_demand[p] = {m: demand[p][m] * scale_factor for m in demand[p].keys()}
+
+    print("Adjusted demand:", adjusted_demand)
+    
     # The rest of products (including AryoSeven_BR) go through the normal build_schedule_with_inventory
-    final_plan, inv_traj = build_schedule_with_inventory(data, demand, products_inventory_protein, payload)
+    final_plan, inv_traj = build_schedule_with_inventory(data, adjusted_demand, products_inventory_protein, payload)
 
     if not final_plan:
         print(
@@ -2041,6 +2218,7 @@ def main(products_protein_per_month, products_inventory_protein, payload):
     for k, v in inv_traj_RC.items():
         inv_traj[k] = v
 
+    
     Output_Printers(combined_plan, inv_traj, demand, products_inventory_protein)
     # or build your final payload from combined results
     payload = {

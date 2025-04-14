@@ -295,16 +295,11 @@ export default {
               exportMinStocks: Array(16).fill(0),
               salesMinStocks: Array(16).fill(0),
             },
-          ],
-        },
-        {
-          name: "Artenix",
-          doses: [
             {
               name: "120",
               exportMinStocks: Array(16).fill(0),
               salesMinStocks: Array(16).fill(0),
-            }
+            },
           ],
         },
         {
@@ -598,7 +593,7 @@ export default {
         };
 
         // Send the filtered data to the backend
-        const response = await axios.post("http://127.0.0.1:8100/api/plan/", postData);
+        const response = await axios.post("http://127.0.0.1:8200/api/plan/", postData);
         this.planResult = response.data.formatted_schedule;
         this.planner = response.data.planner;
         this.timeline_chart = response.data.timeline_chart; // Store the timeline chart image
@@ -617,7 +612,7 @@ export default {
     },
   },
   mounted() {
-    axios.get("http://127.0.0.1:8100/api/lines")
+    axios.get("http://127.0.0.1:8200/api/lines")
       .then(response => {
         const commonLines = response.data.Common_Lines;
         const options = [];

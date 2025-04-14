@@ -127,6 +127,9 @@ def _search_dose(prdct: str, x_dose: float) -> float:
         prdct = "AryoSeven BR"
     if prdct == "AryoSeven_RC":
         prdct = "AryoSeven RC"
+        
+    if prdct == "Arylia" and x_dose == 120:
+        prdct = "Artenix"
 
     subset = df_parameters.loc[
         (df_parameters["Product name"] == prdct) & (df_parameters["Dose"] == x_dose)
@@ -442,6 +445,8 @@ def create_timeline_chart(final_plan: list) -> str:
     return image_base64
 
 
+
+
 # 4) FastAPI Endpoint
 @app.post("/api/plan/")
 async def receive_plan(payload: PlanPayload) -> Dict[str, Any]:
@@ -459,6 +464,8 @@ async def receive_plan(payload: PlanPayload) -> Dict[str, Any]:
     planner = Planner(payload=payload)
     result = {key: planner[key] for key in list(planner.keys())[:2]}
     result["Demand"] = planner["Schedule"]["demand"]
+
+
     return {
         "planner": result,
         # "formatted_schedule": formatted_output,
