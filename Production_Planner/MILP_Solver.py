@@ -519,7 +519,7 @@ def build_schedule_with_inventory(
 ) -> tuple[list[dict], dict[str, dict]]:
     model = cp_model.CpModel()
 
-    print(products_inventory_protein)
+    print("\nProduct Inventory Entered By User =>",products_inventory_protein)
     # 1) Filter relevant products
     all_prods = list(data["Common_Lines"].keys())
     products = [p for p in all_prods if p in demand]
@@ -1366,7 +1366,7 @@ def build_schedule_with_inventory(
             model.Add(inventory[(p, m)] >= 0)
     
     min_stock = payload.Min_Stock
-    print("-----------\n",min_stock)
+    print("Product Monthly Min Stock =>",min_stock)
     # Suppose min_stock[p][m] = X means you want inventory of product p in month m >= X
     for p in products:
         for m in range(1, TOTAL_MONTHS + 1):
@@ -1393,7 +1393,7 @@ def build_schedule_with_inventory(
     # Solve
     solver = cp_model.CpSolver()
     # solver.parameters.stop_after_first_solution = True
-    solver.parameters.max_time_in_seconds = 900
+    solver.parameters.max_time_in_seconds = 100
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
     solver.parameters.symmetry_level = 2  # Enables symmetry breaking during preprocessing
     solver.parameters.log_search_progress = False
@@ -1404,22 +1404,10 @@ def build_schedule_with_inventory(
         print("No feasible solution.")
         return [], {}
 
-    print("\n=== Expiration Month Verification ===")
-    for p in products:
-        print(f"\nProduct: {p}")
-        for r in range(MAX_RUNS):
-            if solver.Value(isValid[(p, r, m)]):
-                exp_day = solver.Value(expiration_date[(p, r)])
-                print(f"Run {r}:")
-                print(f"  Expiration day: {exp_day}")
-                print(f"  Should be in month: {(exp_day // 30) + 1}")
-                print("  ---")
 
     # 7) Build final plan (updated for partial usage / Scenario B)
     final_plan = []
-    print("\n=== Active Runs and Expiration Information ===")
     for p in products:
-        print(f"\nProduct: {p}")
         for r in range(MAX_RUNS):
             if solver.Value(activate_run[(p, r)]) == 0:
                 continue
@@ -1446,11 +1434,6 @@ def build_schedule_with_inventory(
                 usage_val = solver.Value(usage[(p, r, m)])
                 if usage_val > 0:
                     monthly_usage[m] = usage_val
-
-            print(f"Run {r}:")
-            print(f"  Finish Date: {finish_date_str}, Finish day: {fday}")
-            print(f"  Expiration Date: {exp_date_str}, Expiration day: {exp_day}")
-            print(f"  Monthly Usage: {monthly_usage}")
 
             # Determine which production line was used:
             used_line_id = None
@@ -1611,12 +1594,14 @@ def build_schedule_with_inventory(
     # Instead of reading the model’s inventory variables (which might be driven to 0)
     # we compute the cumulative inventory from the solved usage values.
     inv_traj: dict[str, dict[int, int]] = {}
+    product_initial_stock = {}
     for p in products:
         inv_traj[p] = {}
         # Instead of 0, set current_inv to the existing stock for p
         # e.g. if your existing stock is stored in a dict existing_stock[p]
         # or if you store it as inventory_month0 in the solver, you can read that value here.
         initial_stock = products_inventory_protein[f"{p}"]  # or solver.Value(inventory_month0[p]) if that is an IntVar
+        product_initial_stock[p] = initial_stock
         current_inv = initial_stock
         for m in range(1, TOTAL_MONTHS + 1):
             # Sum the production allocated to product p in period m over all runs.
@@ -1629,8 +1614,9 @@ def build_schedule_with_inventory(
             # current_inv = previous_inv + production in m - demand in m
             current_inv = current_inv + monthly_production - monthly_demand
             inv_traj[p][m] = current_inv
-    print(inv_traj)
-    return final_plan, inv_traj
+    print("Inventory Start => ",inv_traj)
+
+    return final_plan, inv_traj, product_initial_stock
 
 def run_feasibility_model(data: dict[str, dict], demand: dict[str, dict]) -> dict[str, float]:
     """
@@ -2050,30 +2036,7 @@ def list_of_dicts_to_pdf(data, filename):
 
     c.save()
 
-def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein) -> None:
-    #################################################################################################
-    # print("\n=== FINAL PRODUCTION RUNS ===")
-    # for row in final_plan:
-    #     p = row["product"]
-    #     run_idx = row["run_index"]
-    #     fday = row["finish_day"]
-    #     fdate = row["finish_date"]
-    #     # pm = row["production_month"]
-    #     line_ = row["line_used"]
-    #     litv = row["liters"]
-    #     prot = row["produced_protein"]
-    #     stg = row["br_stages"]
-    #     print(
-    #         f"Product={p}, Run={run_idx}, FinishDay={fday} ({fdate}), "
-    #         f"Line={line_}, Liters={litv}, Protein={prot:.2f}"
-    #         # f"Product={p}, Run={run_idx}, FinishDay={fday} ({fdate}), "
-    #         # f"ProdMonth={pm}, Line={line_}, Liters={litv}, Protein={prot:.2f}"
-    #     )
-    #     for stage in stg:
-    #         print(
-    #             f"   Stage={stage['stage']}, StartDay=({stage['start_date']}), EndDay=({stage['end_date']})"
-    #         )
-    #     print("\n")
+def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein) -> str:
     updated_plan = add_bioreactor_preparation_stages(final_plan)
     print_plan_with_preparation_stages(updated_plan)
     #################################################################################################
@@ -2098,17 +2061,22 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
     # Convert list of dictionaries to PDF
     list_of_dicts_to_pdf(final_plan, "E:\Sherkat_DeepSpring_projects\Aryogen_Planning\Data\output.pdf")
     
-    # Section 1: Detailed Production Runs.
-    print_production_runs_detail(final_plan)
+    # # Section 1: Detailed Production Runs.
+    # print_production_runs_detail(final_plan)
 
-    # Section 2: Aggregated Calendar-Based Inventory Summary.
-    print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
-    #################################################################################################
+    # # Section 2: Aggregated Calendar-Based Inventory Summary.
+    # print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
+    
+    report = []
 
-    #################################################################################################
-    batches = assign_batch_codes(final_plan)
-    inventory_by_month, batch_details = simulate_inventory_batches(batches, demand)
-    print_batch_inventory_report(batch_details)
+    # Section 1: Detailed Production Runs
+    report.append(print_production_runs_detail(final_plan))
+
+    # Section 2: Aggregated Calendar-Based Inventory Summary
+    report.append(print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein))
+    
+    return "\n".join(report)
+
     #################################################################################################
 
 
@@ -2158,15 +2126,7 @@ def main(products_protein_per_month, products_inventory_protein, payload):
     demand_gap = compute_monthly_demand_differences(demand, feasible_capacity)
     print("Demand gaps (original demand - feasible capacity):", demand_gap)
 
-    # Assuming 'demand_gaps' is the dictionary containing demand gaps (calculated previously)
-    # Example structure of demand_gaps (this is a sample, adjust as per your actual data):
-    # demand_gaps = {
-    #    'Product1': {1: -100, 2: 200, 3: 0},  # negative gap in month 1 and 3, positive gap in month 2
-    #    'Product2': {1: 50, 2: -150, 3: -50}, # positive gap in month 1, negative in month 2 and 3
-    # }
-
     positive_demand_gaps = {}  # Dictionary to store products with positive gaps
-
     # Loop through the demand gaps and filter for positive gaps
     for product, monthly_gaps in demand_gap.items():
         positive_months = {}  # Store months with positive gaps for this product
@@ -2180,7 +2140,6 @@ def main(products_protein_per_month, products_inventory_protein, payload):
 
     # Now, print the positive demand gaps
     print("Products with positive gaps and their monthly differences:")
-
     for product, months in positive_demand_gaps.items():
         print(f"Product: {product}")
         for month, gap in months.items():
@@ -2196,11 +2155,32 @@ def main(products_protein_per_month, products_inventory_protein, payload):
         # Calculate the scaling factor, ensuring it is no greater than 1.0:
         scale_factor = min(1.0, capacity / total_demand) if total_demand > 0 else 1.0
         adjusted_demand[p] = {m: demand[p][m] * scale_factor for m in demand[p].keys()}
-
     print("Adjusted demand:", adjusted_demand)
     
+    # Dictionary to hold the differences
+    demand_differences = {}
+    # Compare the original demand with adjusted demand to calculate the differences
+    for product in demand:
+        for month in demand[product]:
+            original = demand[product][month]
+            adjusted = adjusted_demand[product][month]
+            
+            # Calculate the difference if there's a reduction (positive value means reduction)
+            difference = original - adjusted
+            if difference > 0:  # Only store if there was a reduction
+                if product not in demand_differences:
+                    demand_differences[product] = {}
+                demand_differences[product][month] = difference
+
+    # Now, print the demand differences
+    print("Demand differences (reduced demand):")
+    for product, months in demand_differences.items():
+        print(f"Product: {product}")
+        for month, diff in months.items():
+            print(f"  Month {month}: Difference = {diff}")
+            
     # The rest of products (including AryoSeven_BR) go through the normal build_schedule_with_inventory
-    final_plan, inv_traj = build_schedule_with_inventory(data, adjusted_demand, products_inventory_protein, payload)
+    final_plan, inv_traj, initial_stock = build_schedule_with_inventory(data, adjusted_demand, products_inventory_protein, payload)
 
     if not final_plan:
         print(
@@ -2221,11 +2201,18 @@ def main(products_protein_per_month, products_inventory_protein, payload):
     
     Output_Printers(combined_plan, inv_traj, demand, products_inventory_protein)
     # or build your final payload from combined results
+    
+    if demand_differences == {}:
+        demand_differences = "No reductions"
+    # Create a payload to return
     payload = {
         "status": "OK",
         "final_plan": combined_plan,
         "inventory_trajectory": inv_traj,
         "demand": demand,
+        "demand_reduction": demand_differences,
+        "feasible_capacity": adjusted_demand,
+        "initial_stock": initial_stock,
     }
     return payload
 

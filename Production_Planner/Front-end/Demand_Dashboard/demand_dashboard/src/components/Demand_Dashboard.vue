@@ -197,14 +197,25 @@
       <h2>Planner Raw Data</h2>
       <pre class="json-box">{{ JSON.stringify(planner, null, 2) }}</pre>
     </div>
-    <div v-if="planResult" class="results">
-      <h2>Schedule Results</h2>
-      <pre class="schedule-box">
-        <span v-for="(line, i) in planResult" :key="i">
-          {{ line }}
-        </span>
-      </pre>
+
+
+    <!-- Show the demand reduction (differences) -->
+    <div v-if="Initial_Inventory_Amount" class="results">
+      <h2>Initial Inventory Amount</h2>
+      <pre class="json-box">{{ JSON.stringify(Initial_Inventory_Amount, null, 2) }}</pre>
     </div>
+
+    <!-- Show the demand reduction (differences) -->
+    <div v-if="demand_reduction" class="results">
+      <h2>Demand Reductions</h2>
+      <pre class="json-box">{{ JSON.stringify(demand_reduction, null, 2) }}</pre>
+    </div>
+
+    <div v-if="feasible_capacity" class="results">
+      <h2>Plan made by demands below:</h2>
+      <pre class="json-box">{{ JSON.stringify(feasible_capacity, null, 2) }}</pre>
+    </div>
+
     <div v-if="timeline_chart" class="chart-container">
       <h2>Timeline Chart</h2>
       <img :src="'data:image/png;base64,' + timeline_chart" alt="Timeline Chart" />
@@ -525,6 +536,9 @@ export default {
       this.error = null;
       this.planResult = null;
       this.planner = null;
+      this.demand_reduction = null;
+      this.Initial_Inventory_Amount = null;
+      this.feasible_capacity = null;
       this.timeline_chart = null;  // Reset the timeline chart image
 
       try {
@@ -596,6 +610,9 @@ export default {
         const response = await axios.post("http://127.0.0.1:8200/api/plan/", postData);
         this.planResult = response.data.formatted_schedule;
         this.planner = response.data.planner;
+        this.demand_reduction = response.data.Reduced_Demand;
+        this.Initial_Inventory_Amount = response.data.Initial_Inventory_Amount;
+        this.feasible_capacity = response.data.Feasible_Demand;
         this.timeline_chart = response.data.timeline_chart; // Store the timeline chart image
 
         if (Array.isArray(response.data.schedule)) {

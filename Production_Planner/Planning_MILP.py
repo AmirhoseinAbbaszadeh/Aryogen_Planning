@@ -463,13 +463,16 @@ async def receive_plan(payload: PlanPayload) -> Dict[str, Any]:
     print("************************\n", payload)
     planner = Planner(payload=payload)
     result = {key: planner[key] for key in list(planner.keys())[:2]}
-    result["Demand"] = planner["Schedule"]["demand"]
+    result["Demand + Coverage"] = planner["Schedule"]["demand"]
 
+    print(planner["Schedule"]["demand_reduction"])
+    print(planner["Schedule"]["feasible_capacity"])
 
     return {
         "planner": result,
-        # "formatted_schedule": formatted_output,
-        # "timeline_chart": timeline_chart
+        "Reduced_Demand": planner["Schedule"]["demand_reduction"],
+        "Feasible_Demand": planner["Schedule"]["feasible_capacity"],
+        "Initial_Inventory_Amount": planner["Schedule"]["initial_stock"],
     }
 
 
