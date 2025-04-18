@@ -2,18 +2,17 @@ import base64
 import io
 import json
 import math
-
-# import re
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
-
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import MILP_Solver
 import pandas as pd
+
+# import re
+from datetime import datetime, date
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 # from openpyxl import load_workbook
 
@@ -100,6 +99,7 @@ class PlanPayload(BaseModel):
     selectedDate: Optional[str] = None
     currentStocks: Optional[List[dict]] = None
     busyLines: Optional[List[dict]] = None
+    initialExpiry: Dict[str, str]   # parse DD/MM/YYYY automatically
 
 
 
@@ -462,19 +462,23 @@ async def receive_plan(payload: PlanPayload) -> Dict[str, Any]:
     """
     print("************************\n", payload)
     planner = Planner(payload=payload)
-    result = {key: planner[key] for key in list(planner.keys())[:2]}
-    result["Demand + Coverage"] = planner["Schedule"]["demand"]
-
-    print(planner["Schedule"]["demand_reduction"])
-    print(planner["Schedule"]["feasible_capacity"])
 
     return {
-        "planner": result,
+        "planner": planner["Schedule"],
+        "demand": planner["Schedule"]["demand"],
         "Reduced_Demand": planner["Schedule"]["demand_reduction"],
         "Feasible_Demand": planner["Schedule"]["feasible_capacity"],
         "Initial_Inventory_Amount": planner["Schedule"]["initial_stock"],
     }
-
+    # payload = {
+    #     "status": "OK",
+    #     "final_plan": combined_plan,
+    #     "inventory_trajectory": inv_traj,
+    #     "demand": demand,
+    #     "demand_reduction": demand_differences,
+    #     "feasible_capacity": adjusted_demand,
+    #     "initial_stock": initial_stock,
+    # }
 
 @app.get("/api/lines")
 async def get_lines() -> Dict[str, Any]:

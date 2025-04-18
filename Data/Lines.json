@@ -168,6 +168,45 @@
                         "Labeling & Packaging": 6
                     },
                     "status": "active"
+                },
+                {
+                    "id": 5,
+                    "BRs": {
+                        "10": 4,
+                        "100": 4,
+                        "500": 4,
+                        "2000-5": 16
+                    },
+                    "Overlaps": {
+                        "10 & 100": 1,
+                        "100 & 500": 1,
+                        "500 & 2000-5": 1
+                    },
+                    "N_Harvest": 1,
+                    "Mabs": {
+                        "After 2000-5": 2
+                    },
+                    "Follow_Up_2000-5": {
+                        "2000-5_Mab_QC_Test": 2,
+                        "HIC 1 ": 1,
+                        "HIC 2 ": 1,
+                        "HIC 3 ": 1,
+                        "HIC 4 ": 1,
+                        "HIC_QC_Test": 1,
+                        "Nano_Filteration": 2,
+                        "DS_Preparation": 1,
+                        "DS_QC_Test": 10,
+                        "Formulation": 1,
+                        "Filling": 1,
+                        "Visual Insp.": 2,
+                        "Labeling": 2,
+                        "Packaging": 3,
+                        "DP_QC_Test": 15,
+                        "Release": 1
+                    },
+                    "Follow_Up_2000-5_SameStarts": "None",
+                    "Follow_Up_2000-5_Overlaps": "None",
+                    "status": "active"
                 }
         ]}
     ],

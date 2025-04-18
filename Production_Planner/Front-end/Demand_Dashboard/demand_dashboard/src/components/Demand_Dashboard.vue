@@ -216,22 +216,34 @@
       <pre class="json-box">{{ JSON.stringify(feasible_capacity, null, 2) }}</pre>
     </div>
 
-    <div v-if="timeline_chart" class="chart-container">
-      <h2>Timeline Chart</h2>
-      <img :src="'data:image/png;base64,' + timeline_chart" alt="Timeline Chart" />
+    <!-- Timeline Chart using our interactive component -->
+    <div v-if="planResult && planResult.planner && planResult.planner.final_plan" class="chart-container">
+      <h2>Production Timeline Chart</h2>
+      <GanttChart :planData="planResult.planner.final_plan" />
+    </div>
+
+    <!-- Inventory Chart (if your payload includes inventory_trajectory) -->
+    <div v-if="planResult && planResult.planner.inventory_trajectory" class="chart-container">
+      <h2>Inventory Trend Chart</h2>
+      <InventoryChart :inventoryData="planResult.planner.inventory_trajectory" />
     </div>
   </div>
+
+  
 </template>
 
 
 <script>
 import axios from "axios";
 import Datepicker from 'vue3-datepicker';
+import GanttChart from '@/components/GanttChart.vue';
+import InventoryChart from '@/components/InventoryChart.vue';
 
 export default {
   name: "FullPlanScheduler",
   components: {
-    Datepicker
+    Datepicker,
+    GanttChart, InventoryChart
   },
   data() {
     return {
@@ -404,12 +416,16 @@ export default {
       monthsCount: 12,
       planResult: null,
       planner: null,
-      timeline_chart: null,  // new property for the timeline chart image
       error: null,
       selectedDate: null,
       customFormat: 'dd/MM/yyyy',
       inventoryData: [],
       currentStocks: [],
+      initialExpiry: {
+        // e.g. 
+        // "Altebrel": "01/06/2025",
+        // "AryoTrust": "15/07/2025"
+      },
       // New Busy Lines data:
       busyLines: [],
       // Available lines loaded from the server
@@ -491,15 +507,27 @@ export default {
     hasNonZeroDemand(dose) {
       return dose.exportMinStocks.some((stock) => stock !== 0) || dose.salesMinStocks.some((stock) => stock !== 0);
     },
-        // Inventory & Expiration section methods
+    //     // Inventory & Expiration section methods
+    // addCurrentStock() {
+    //   this.currentStocks.push({
+    //     productDose: "",
+    //     amount: 0,
+    //     expirationOffsetMonths: 0, // User enters number of months offset
+    //     expirationOffsetDays: 0, // User enters number of months offset
+    //   });
+    // },
     addCurrentStock() {
-      this.currentStocks.push({
+      const newEntry = {
         productDose: "",
         amount: 0,
         expirationOffsetMonths: 0, // User enters number of months offset
         expirationOffsetDays: 0, // User enters number of months offset
-      });
+        expirationDate: "", // This is where the expiration date will be stored
+      };
+      
+      this.currentStocks.push(newEntry);
     },
+
     removeCurrentStock(index) {
       this.currentStocks.splice(index, 1);
     },
@@ -584,6 +612,33 @@ export default {
           Expiration: this.calculateExpiration(this.selectedDate, entry.expirationOffsetMonths, entry.expirationOffsetDays),
         }));
 
+        this.currentStocks.forEach((entry) => {
+          if (entry.expirationOffsetMonths || entry.expirationOffsetDays) {
+            entry.expirationDate = this.calculateExpiration(
+              this.selectedDate,
+              entry.expirationOffsetMonths,
+              entry.expirationOffsetDays
+            );
+          }
+        });
+
+        const initialExpiry = {};
+        this.currentStocks.forEach(entry => {
+          if (!entry.productDose) return;
+          
+          const [product] = entry.productDose.split('|');
+          
+          // only keep the first one if user entered multiple for the same product
+          if (!initialExpiry[product]) {
+            const expiration = entry.expirationDate || this.calculateExpiration(
+              this.selectedDate,
+              entry.expirationOffsetMonths,
+              entry.expirationOffsetDays
+            );
+            
+            initialExpiry[product] = expiration; // Assign the expiration date
+          }
+        });
         // Build busyLines payload with computed finish date.
         const busyLinesPayload = this.busyLines.map((entry) => ({
           line: entry.line,
@@ -603,17 +658,16 @@ export default {
           selectedDate: this.selectedDate,  // Add the date picker value
           currentStocks: currentStocksPayload,
           busyLines: busyLinesPayload,
-
+          initialExpiry: initialExpiry,
         };
 
         // Send the filtered data to the backend
-        const response = await axios.post("http://127.0.0.1:8200/api/plan/", postData);
-        this.planResult = response.data.formatted_schedule;
+        const response = await axios.post("http://127.0.0.1:8100/api/plan/", postData);
+        this.planResult = response.data;
         this.planner = response.data.planner;
         this.demand_reduction = response.data.Reduced_Demand;
         this.Initial_Inventory_Amount = response.data.Initial_Inventory_Amount;
         this.feasible_capacity = response.data.Feasible_Demand;
-        this.timeline_chart = response.data.timeline_chart; // Store the timeline chart image
 
         if (Array.isArray(response.data.schedule)) {
           this.schedule = response.data.schedule;
@@ -629,7 +683,7 @@ export default {
     },
   },
   mounted() {
-    axios.get("http://127.0.0.1:8200/api/lines")
+    axios.get("http://127.0.0.1:8100/api/lines")
       .then(response => {
         const commonLines = response.data.Common_Lines;
         const options = [];
@@ -670,10 +724,6 @@ body {
   font-size: 14px;
 }
 
-.chart-container {
-  margin-top: 20px;
-  text-align: center;
-}
 .busy-line-entry {
   margin-bottom: 15px;
   border: 1px solid #e0e0e0;
@@ -708,12 +758,6 @@ body {
 .calculated-finish {
   margin-top: 5px;
   font-size: 14px;
-}
-
-.chart-container img {
-  max-width: 100%;
-  border: 1px solid #ccc;
-  border-radius: 10px;
 }
 
 .container {

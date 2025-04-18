@@ -12,7 +12,7 @@ SHELF_LIFE = 24  # Shelf life in months
 DAYS_PER_MONTH = 30
 TOTAL_MONTHS = None
 BASE_DATE_FOR_PLANNING = None
-MAX_RUNS = 200  # Maximum number of production runs per product
+MAX_RUNS = 600  # Maximum number of production runs per product
 bigM = 1_000_000_000
 
 from datetime import datetime
@@ -100,164 +100,6 @@ def parse_volume(br_name: str) -> float:
         else:
             break
     return float(digits) if digits else 0.0
-
-
-def assign_batch_codes(final_plan):
-    """
-    Attach a unique batch code to each production run in final_plan.
-    Returns a dict mapping products to a list of batches.
-    Each batch is a dict with keys: 'code', 'prod_month', 'release_date', 'quantity'
-    """
-    batches = {}
-    for run in final_plan:
-        prod = run["product"]
-        # Only consider runs that produced something (or that have a production month)
-        if run["production_month"] is None:
-            continue
-        qty = run["produced_protein"]
-        month = run["production_month"]
-        release_date = run[
-            "release_day"
-        ]  # Assuming this value exists in your input data
-        batch_code = str(uuid.uuid4())
-        batch = {
-            "code": batch_code,
-            "prod_month": month,
-            "release_date": release_date,
-            "quantity": qty,
-        }
-        batches.setdefault(prod, []).append(batch)
-    return batches
-
-
-def simulate_inventory_batches(batches, demand):
-    """
-    For each product, simulate FIFO inventory consumption with batch expiration.
-    Returns two dictionaries:
-        - inventory_by_month: available quantity per product per month
-        - batch_details: detailed info (including expired amounts) per product per month.
-    """
-    # Initialize report dictionaries.
-    inventory_by_month = {}
-    batch_details = {}
-    # Process each product individually.
-    for prod, batch_list in batches.items():
-        # Sort batches by production month (FIFO)
-        batch_queue = deque(sorted(batch_list, key=lambda b: b["prod_month"]))
-        inventory_by_month[prod] = {}
-        batch_details[prod] = {}
-        current_inventory = 0.0
-        # For each month from 1 to TOTAL_MONTHS:
-        for m in range(1, TOTAL_MONTHS + 1):
-            # Calculate the current simulation month date
-            current_simulation_date = date(2026, 1, 1) + timedelta(
-                days=30 * (m - 1)
-            )  # m-1 because month 1 is 0 days away from start
-
-            # First, remove expired batches based on release date
-            expired_total = 0.0
-            while batch_queue:
-                batch = batch_queue[0]
-
-                # Ensure release_date is a datetime.date object
-                release_date = batch["release_date"]
-
-                # Case 1: release_date is an integer (day offset)
-                if isinstance(release_date, int):
-                    release_date = date(2026, 1, 1) + timedelta(days=release_date)
-
-                # Case 2: release_date is a string (date in YYYY-MM-DD format)
-                elif isinstance(release_date, str):
-                    release_date = datetime.strptime(release_date, "%Y-%m-%d").date()
-
-                # Case 3: release_date is already a datetime.date object
-                elif isinstance(release_date, datetime.date):
-                    pass  # it's already a date, nothing to do
-
-                else:
-                    raise ValueError(
-                        f"Unsupported release_date format: {type(release_date)}"
-                    )
-
-                # Calculate expiration date
-                expiration_date = release_date + timedelta(
-                    days=SHELF_LIFE * DAYS_PER_MONTH
-                )
-
-                if expiration_date <= current_simulation_date:
-                    expired_total += batch["quantity"]
-                    batch_queue.popleft()  # Remove expired batch
-                else:
-                    break
-
-            # Add production from batches produced in current month (if any).
-            # Calculate available inventory from nonexpired batches.
-            available = sum(b["quantity"] for b in batch_queue)
-            # Now, apply demand consumption in FIFO order.
-            demand_m = demand.get(prod, {}).get(m, 0)
-            remaining_demand = demand_m
-            for b in list(batch_queue):
-                if remaining_demand <= 0:
-                    break
-                if b["quantity"] <= remaining_demand:
-                    remaining_demand -= b["quantity"]
-                    b["quantity"] = 0
-                    batch_queue.popleft()  # Batch fully consumed
-                else:
-                    b["quantity"] -= remaining_demand
-                    remaining_demand = 0
-            available_after = sum(
-                b["quantity"] for b in batch_queue if b["prod_month"] <= m
-            )
-
-            # Save monthly inventory data.
-            inventory_by_month[prod][m] = available_after
-            batch_details[prod][m] = {
-                "demand": demand_m,
-                "expired": expired_total,
-                "available": available_after,
-                "batches": list(batch_queue),  # snapshot of current batches
-            }
-    return inventory_by_month, batch_details
-
-
-def print_batch_inventory_report(batch_details):
-    """
-    Print the Batch-based Inventory Report in a clearer format, showing the demand, expired, and available products
-    in a structured way, with detailed batch information for each product.
-    """
-    print("\n=== Batch-based Inventory Report ===")
-
-    for prod, month_data in batch_details.items():
-        print(f"Product={prod}:")
-
-        for m in range(1, TOTAL_MONTHS + 1):
-            details = month_data.get(m, {})
-            demand_m = details.get("demand", 0)
-            expired_total = details.get("expired", 0)
-            available = details.get("available", 0)
-            batches = details.get("batches", [])
-
-            # Start with basic information about the month
-            print(f" Month {m}:")
-            print(
-                f"   Demand = {demand_m:10.2f}, Expired = {expired_total:10.2f}, Available = {available:10.2f}"
-            )
-
-            # If there are batches, show their details
-            if batches:
-                for b in batches:
-                    batch_code = b["code"][
-                        :8
-                    ]  # Display the first 8 characters of the batch code
-                    prod_month = b["prod_month"]
-                    batch_qty = b["quantity"]
-                    print(
-                        f"    Batch {batch_code}..., Prod Month = {prod_month}, Remaining Qty = {batch_qty:10.2f}"
-                    )
-            else:
-                print("    No batches available for this month.")
-            print("-" * 50)  # Separator for better readability
 
 def build_solver_inputs_from_payload(
     busyLines: list,
@@ -516,7 +358,7 @@ def build_schedule_with_inventory(
     demand: dict[str, dict],
     products_inventory_protein,
     payload
-) -> tuple[list[dict], dict[str, dict]]:
+):
     model = cp_model.CpModel()
 
     print("\nProduct Inventory Entered By User =>",products_inventory_protein)
@@ -894,23 +736,45 @@ def build_schedule_with_inventory(
                                 f"fu_ref_{p}_{r}_l{l_id}_{stage_key}",
                             )
                             # Instead of directly using mab_idx, we try candidate indices:
-                            found_key = None
-                            max_candidates = 10  # adjust this value as necessary
-                            for idx in range(1, max_candidates + 1):
-                                key_normal = (p, r, l_id, stage_key, idx)
-                                key_ss = (p, r, l_id, stage_key, 1000 + idx)
-                                if key_normal in mab_vars:
-                                    found_key = key_normal
-                                    break
-                                elif key_ss in mab_vars:
-                                    found_key = key_ss
-                                    break
+                            # Instead of directly iterating over candidate indices, do this:
 
-                            if found_key is None:
-                                raise KeyError(f"No Mab or SS stage found for keys with base {(p, r, l_id, stage_key)} up to {max_candidates}")
+                            # Create a list to collect all Mab (and SS) stage end times for the current (p, r, l_id, stage_key)
+                            candidate_end_exprs = []
+                            for key in mab_vars:
+                                if key[0] == p and key[1] == r and key[2] == l_id and key[3] == stage_key:
+                                    candidate_end_exprs.append(mab_vars[key][1])
+                            # Similarly, if you want to also include SS's tracked with offsets (e.g., keys with 1000+ something)
+                            for key in mab_vars:
+                                if key[0] == p and key[1] == r and key[2] == l_id and key[3] == stage_key and key[4] >= 1000:
+                                    candidate_end_exprs.append(mab_vars[key][1])
 
-                            # Use the found reference end time to set fu_prev_end (with your desired offset, here +2)
-                            model.Add(fu_prev_end == mab_vars[found_key][1] + 2)
+                            if not candidate_end_exprs:
+                                raise KeyError(f"No Mab or SS stage found for (p, r, l_id, stage_key): {(p, r, l_id, stage_key)}")
+
+                            # Create a new CP variable to hold the maximum end time among Mab (and SS) stages for the current BR stage.
+                            last_stage_end = model.NewIntVar(NEGATIVE_BOUND, 50000, f"last_stage_end_{p}_{r}_{l_id}_{stage_key}")
+                            model.AddMaxEquality(last_stage_end, candidate_end_exprs)
+
+                            # Define fu_prev_end to start FU stages 2 days after the maximum Mab/SS stage end time.
+                            fu_prev_end = model.NewIntVar(NEGATIVE_BOUND, 50000, f"fu_ref_{p}_{r}_l{l_id}_{stage_key}")
+                            model.Add(fu_prev_end == last_stage_end + 2)
+
+                            # found_key = None
+                            # max_candidates = 10  # adjust this value as necessary
+                            # for idx in range(1, max_candidates + 1):
+                            #     key_normal = (p, r, l_id, stage_key, idx)
+                            #     key_ss = (p, r, l_id, stage_key, 1000 + idx)
+                            #     if key_normal in mab_vars:
+                            #         found_key = key_normal
+                            #         break
+                            #     elif key_ss in mab_vars:
+                            #         found_key = key_ss
+                            #         break
+                            # if found_key is None:
+                            #     raise KeyError(f"No Mab or SS stage found for keys with base {(p, r, l_id, stage_key)} up to {max_candidates}")
+
+                            # # Use the found reference end time to set fu_prev_end (with your desired offset, here +2)
+                            # model.Add(fu_prev_end == mab_vars[found_key][1] + 2)
 
                             for fu_name in fu_stage_order:
 
@@ -946,8 +810,6 @@ def build_schedule_with_inventory(
                                         model.Add(
                                             assigned_start == fu_prev_end
                                         ).OnlyEnforceIf(use_line[(p, r, l_id)])
-
-
 
                                     # Schedule all stages in the group that are not already scheduled.
                                     for stg in stages_to_sync:
@@ -1021,8 +883,7 @@ def build_schedule_with_inventory(
                                         ][1]
                                         + 1
                                     )
-                                
-                                    
+
                                 # For subsequent stages, enforce overlap if defined.
                                 prev_fu_name = fu_stage_order[idx - 1]
                                 # Look for an overlap definition between prev_fu_name and fu_name.
@@ -1323,12 +1184,12 @@ def build_schedule_with_inventory(
 
     # -- NEW CODE: Set inventory in month 1 to existing stock plus first production minus demand
     # If you want EXACT month 0 as your initial inventory, do:
-    inventory_month0 = {}
-    for p in products:
-        # create an IntVar for inventory at 'month 0'
-        inventory_month0[p] = model.NewIntVar(0, bigM, f"Inventory_{p}_m0")
-        # set it to the existing stock:
-        model.Add(inventory_month0[p] == products_inventory_protein[f"{p}"])
+    # inventory_month0 = {}
+    # for p in products:
+    #     # create an IntVar for inventory at 'month 0'
+    #     inventory_month0[p] = model.NewIntVar(0, bigM, f"Inventory_{p}_m0")
+    #     # set it to the existing stock:
+    #     model.Add(inventory_month0[p] == products_inventory_protein[f"{p}"])
 
     # We interpret "monthly production" as the sum of usage in that month
     # Because usage = how much product is actually allocated to month m
@@ -1353,7 +1214,7 @@ def build_schedule_with_inventory(
             if m == 1:
                 # inventory in month 1 = production in month 1 - demand
                 model.Add(
-                    inventory[(p, m)] == inventory_month0[p] + monthly_prod[(p, m)] - monthly_demand[p, m]
+                    inventory[(p, m)] == monthly_prod[(p, m)] - monthly_demand[p, m]
                 )
             else:
                 model.Add(
@@ -1365,46 +1226,55 @@ def build_schedule_with_inventory(
             # Nonnegative
             model.Add(inventory[(p, m)] >= 0)
     
-    min_stock = payload.Min_Stock
-    print("Product Monthly Min Stock =>",min_stock)
-    # Suppose min_stock[p][m] = X means you want inventory of product p in month m >= X
-    for p in products:
-        for m in range(1, TOTAL_MONTHS + 1):
-            required_min = min_stock.get(p, {}).get(m, 0)
-            if required_min > 0:
-                model.Add(inventory[(p, m)] >= required_min)
+    # min_stock = demand
+    # print("Product Monthly Min Stock =>",min_stock)
+    # # Suppose min_stock[p][m] = X means you want inventory of product p in month m >= X
+    # for p in products:
+    #     for m in range(1, TOTAL_MONTHS + 1):
+    #         required_min = min_stock.get(p, {}).get(m, 0)
+    #         print(required_min)
+    #         # if required_min > 0:
+    #         #     model.Add(inventory[(p, m)] >= required_min)
 
 
     # 4) MAKESPAN + PRODUCTION OBJECTIVE
-    all_finish = [finish_time[(p, r)] for p in products for r in range(MAX_RUNS)]
-    global_makespan = model.NewIntVar(NEGATIVE_BOUND, 50000, "makespan")
-    model.AddMaxEquality(global_makespan, all_finish)
+    # all_finish = [finish_time[(p, r)] for p in products for r in range(MAX_RUNS)]
+    # global_makespan = model.NewIntVar(NEGATIVE_BOUND, 50000, "makespan")
+    # model.AddMaxEquality(global_makespan, all_finish)
 
-    total_production = model.NewIntVar(0, bigM, "total_production")
-    model.Add(
-        total_production
-        == sum(produced_protein_int[(p, r)] for p in products for r in range(MAX_RUNS))
-    )
+    # total_production = model.NewIntVar(0, bigM, "total_production")
+    # model.Add(
+    #     total_production
+    #     == sum(produced_protein_int[(p, r)] for p in products for r in range(MAX_RUNS))
+    # )
 
-    model.Minimize(global_makespan + 1000 * total_production)
+    # model.Minimize(global_makespan + 1000 * total_production)
 
     # ========== END MODIFIED SECTION ==========
 
     # Solve
     solver = cp_model.CpSolver()
     # solver.parameters.stop_after_first_solution = True
-    solver.parameters.max_time_in_seconds = 100
+    solver.parameters.max_time_in_seconds = 600
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
-    solver.parameters.symmetry_level = 2  # Enables symmetry breaking during preprocessing
-    solver.parameters.log_search_progress = False
-    solver.parameters.num_search_workers = 8
-    solver.parameters.use_lns = True  # Enable Large Neighborhood Search
+    solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
+    solver.parameters.log_search_progress = True
+    solver.parameters.num_search_workers = 16
+    solver.parameters.stop_after_first_solution = True
     status = solver.Solve(model)
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         print("No feasible solution.")
         return [], {}
 
-
+    inventory_solution = {}
+    for p in products:
+        inventory_solution[p] = {}
+        for m in range(1, TOTAL_MONTHS + 1):
+            # Retrieve the value assigned by the solver to the inventory variable for product p in month m.
+            inv_value = solver.Value(inventory[(p, m)])
+            inventory_solution[p][m] = inv_value
+            print(f"Product: {p}, Month: {m}, Inventory: {inv_value}, production: {solver.Value(monthly_prod[(p, m)])}, demand: {monthly_demand[p, m]}")
+            
     # 7) Build final plan (updated for partial usage / Scenario B)
     final_plan = []
     for p in products:
@@ -1839,7 +1709,7 @@ def print_production_runs_detail(final_plan):
 
 
 # --- Aggregated Calendar-Based Inventory Summary ---
-def print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein):
+def print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein) -> dict:
     """
     Print an aggregated, calendar-based inventory table per product.
     For each period (calculated as 30–day blocks using day_to_date),
@@ -1852,11 +1722,13 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
       - A balance (Inv Start + New Prod – Demand) with surplus/shortage annotation,
       - And the leftover (which here is the same as Inv End).
     """
+    Inventory_Chart_Data = {}
     # Assume new_prod is computed as before:
     new_prod = compute_new_prod(final_plan, max_period)
     inv_by_period = compute_inventory_by_period(final_plan, max_period, products_inventory_protein)
     print("\n=== Aggregated Calendar-Based Inventory Summary ===")
     for prod in sorted(demand.keys()):
+        Inventory_Chart_Data[prod] = {}
         print(f"\nProduct: {prod}")
         header = f"{'Period (Date Range)':<30} {'Demand':>10} {'New Prod':>10} {'Inv Start':>10} {'Inv End':>10} {'Balance':>20} {'Leftover':>10} {'Expired':>10}"
         print(header)
@@ -1875,6 +1747,7 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
                 if balance >= 0
                 else f"Shortage: {abs(balance):.2f}"
             )
+            Inventory_Chart_Data[prod][m] = inv_end
             # With the new rule, expired amount is the difference between the theoretical balance (if no expiration)
             # and the actual inventory carried (which in an expiration period becomes 0 for that run).
             expired = max((inv_start + np_val - dem_val) - inv_end, 0)
@@ -1882,6 +1755,8 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
                 f"{period_label:<30} {dem_val:>10} {np_val:>10.2f} {inv_start:>10.2f} {inv_end:>10.2f} {balance_text:>20} {inv_end:>10.2f} {expired:>10.2f}"
             )
     print("\n=== End of Inventory Summary ===")
+    
+    return Inventory_Chart_Data
 
 
 def print_plan_with_preparation_stages(updated_plan):
@@ -2067,18 +1942,15 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
     # # Section 2: Aggregated Calendar-Based Inventory Summary.
     # print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
     
-    report = []
 
     # Section 1: Detailed Production Runs
-    report.append(print_production_runs_detail(final_plan))
+    print_production_runs_detail(final_plan)
 
     # Section 2: Aggregated Calendar-Based Inventory Summary
-    report.append(print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein))
-    
-    return "\n".join(report)
-
+    Inventory_Chart_Data = print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
     #################################################################################################
 
+    return Inventory_Chart_Data
 
 # --- MODIFIED CODE in main() to handle AryoSeven_RC with a separate planner ---
 def main(products_protein_per_month, products_inventory_protein, payload):
@@ -2099,15 +1971,42 @@ def main(products_protein_per_month, products_inventory_protein, payload):
         demand.setdefault(base_product, {})
         demand[base_product][m] = demand[base_product].get(m, 0.0) + float(val)
 
+    products = []
     # For demonstration, let's keep the logic that redistributes total demand equally across 12 months
     for product, monthly_demand in demand.items():
+        products.append(product)
         total_demand = sum(monthly_demand.values())
         for mm in range(1, TOTAL_MONTHS + 1):
             demand[product][mm] = total_demand / TOTAL_MONTHS
             demand[product][mm] = demand[product][mm] + (3 * demand[product][mm])
-            
-
     print("Demand dict after distribution:\n", demand)
+            
+            
+    # Initialize a dictionary to track stock usage for each product and month
+    stock_usage = {}  
+    for p in products:
+        stock_usage[p] = {}  # Initialize stock usage tracking for each product
+
+        initial_stock_inventory = products_inventory_protein.get(p, 0)  # The initial stock for the product
+        
+        # Loop through each month to match stock usage with demand
+        for m in range(1, TOTAL_MONTHS + 1):
+            if initial_stock_inventory > 0:
+                # If there is still initial stock available, use it to fulfill the demand
+                demand_for_month = math.ceil(demand[p].get(m, 0))  # Get the demand for the month
+                stock_used = min(initial_stock_inventory, demand_for_month)  # Use as much stock as possible to fulfill the demand
+                stock_usage[p][m] = stock_used  # Track how much stock was used in this month
+                
+                if stock_usage[p][m] == demand_for_month:
+                    demand[p][m] = 0  # If the demand is fully met, set it to 0
+                elif stock_usage[p][m] < demand_for_month:
+                    demand[p][m] -= stock_used
+                    products_inventory_protein[p] = 0
+                
+                initial_stock_inventory -= stock_used  # Decrease the available stock
+            else:
+                pass
+
     
     # If AryoSeven_RC is in the demand, call the specialized planner
     final_plan_RC, inv_traj_RC = [], {}
@@ -2199,7 +2098,7 @@ def main(products_protein_per_month, products_inventory_protein, payload):
         inv_traj[k] = v
 
     
-    Output_Printers(combined_plan, inv_traj, demand, products_inventory_protein)
+    Inventory_Chart_Data = Output_Printers(combined_plan, inv_traj, demand, products_inventory_protein)
     # or build your final payload from combined results
     
     if demand_differences == {}:
@@ -2208,7 +2107,7 @@ def main(products_protein_per_month, products_inventory_protein, payload):
     payload = {
         "status": "OK",
         "final_plan": combined_plan,
-        "inventory_trajectory": inv_traj,
+        "inventory_trajectory": Inventory_Chart_Data,
         "demand": demand,
         "demand_reduction": demand_differences,
         "feasible_capacity": adjusted_demand,
