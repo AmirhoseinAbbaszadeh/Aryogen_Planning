@@ -292,11 +292,8 @@ def Products_Protein(
     returns { "Altebrel": initial_amount, ... }.
     Adjust splitting logic as needed.
     """
-    products_protein = {}
-    products_protein_per_month = {}
     products_inventory_protein = {}
     init_stock = {}
-    stock_amount = 0
     
     for stock in payload.currentStocks:
         # if stock is a dict, use stock['productDose'] and stock['amount']
@@ -311,33 +308,94 @@ def Products_Protein(
         products_inventory_protein[f"{prdct}"] = 0
         
     # print(init_stock)
+    products_protein = {}
+    sales_stock_protein = {}
+    export_stock_protein = {}
+    products_protein_per_month = {}
+    stock_amount = 0
+
+    # 1) EXPORT side
+    for prdct, doses_dict in payload.Export_Stocks.items():
+        export_stock_protein.setdefault(prdct, {})
+        products_protein.setdefault(prdct, {})
+
+        for dose_str, month_map in doses_dict.items():
+            numeric_dose      = float(dose_str) if "." in dose_str else int(dose_str)
+            mg_per_container  = _search_dose(prdct, numeric_dose)
+
+            for month, qty in month_map.items():
+                grams = qty * mg_per_container * 0.001
+
+                # accumulate export by month
+                export_stock_protein[prdct].setdefault(month, 0.0)
+                export_stock_protein[prdct][month] += grams
+
+                # also add into combined total
+                products_protein[prdct].setdefault(month, 0.0)
+                products_protein[prdct][month] += grams
+
+    # 2) SALES side
+    for prdct, doses_dict in payload.Sales_Stocks.items():
+        sales_stock_protein.setdefault(prdct, {})
+        products_protein.setdefault(prdct, {})
+
+        for dose_str, month_map in doses_dict.items():
+            numeric_dose      = float(dose_str) if "." in dose_str else int(dose_str)
+            mg_per_container  = _search_dose(prdct, numeric_dose)
+
+            for month, qty in month_map.items():
+                grams = qty * mg_per_container * 0.001
+
+                # accumulate sales by month
+                sales_stock_protein[prdct].setdefault(month, 0.0)
+                sales_stock_protein[prdct][month] += grams
+
+                # also add into combined total
+                products_protein[prdct].setdefault(month, 0.0)
+                products_protein[prdct][month] += grams
+
+
+
     
-    for prdct, doses_dict in payload.Min_Stock.items():
-        dose_need_protein = 0
-        for x_dose, month_demand in doses_dict.items():
-            total_demand = sum(month_demand.values())
-            numeric_dose = float(x_dose) if "." in x_dose else int(x_dose)
-            mg_per_container = _search_dose(prdct, numeric_dose)
-            dose_need_protein += total_demand * mg_per_container * 0.001
 
-            for month in month_demand.items():
-                num = month[1] * mg_per_container * 0.001
-                num = f"{num:.2f}"
-                products_protein_per_month[f"{prdct} {x_dose} {month[0]}"] = float(num)
+    # 3) INVENTORY (unchanged)
+    for prod_dose, stock_amount in init_stock.items():
+        prdct, dose_val = prod_dose.split()
+        numeric_dose    = float(dose_val) if "." in dose_val else int(dose_val)
+        mg_per_container = _search_dose(prdct, numeric_dose)
+        grams = stock_amount * mg_per_container * 0.001
+        products_inventory_protein.setdefault(prdct, 0)
+        products_inventory_protein[prdct] += int(math.ceil(grams))
+    
+    # for prdct, doses_dict in payload.Min_Stock.items():
+    #     dose_need_protein = 0
+    #     for x_dose, month_demand in doses_dict.items():
+    #         total_demand = sum(month_demand.values())
+    #         numeric_dose = float(x_dose) if "." in x_dose else int(x_dose)
+    #         mg_per_container = _search_dose(prdct, numeric_dose)
+    #         dose_need_protein += total_demand * mg_per_container * 0.001
 
-            for prodct, stock_amount in init_stock.items():
-                if prodct == f"{prdct} {numeric_dose}":
-                    stock_amount = stock_amount * mg_per_container * 0.001
-                    products_inventory_protein[f"{prdct}"] = products_inventory_protein[f"{prdct}"] + int(math.ceil(stock_amount))
-                    continue
+    #         for month in month_demand.items():
+    #             num = month[1] * mg_per_container * 0.001
+    #             num = f"{num:.2f}"
+    #             products_protein_per_month[f"{prdct} {x_dose} {month[0]}"] = float(num)
+
+    #         for prodct, stock_amount in init_stock.items():
+    #             if prodct == f"{prdct} {numeric_dose}":
+    #                 stock_amount = stock_amount * mg_per_container * 0.001
+    #                 products_inventory_protein[f"{prdct}"] = products_inventory_protein[f"{prdct}"] + int(math.ceil(stock_amount))
+    #                 continue
             
-        products_protein[prdct] = dose_need_protein
+    #     products_protein[prdct] = dose_need_protein
 
     # print(products_inventory_protein)
 
+    print("Products Protein:", products_protein)
+    print("Export Stock Protein:", export_stock_protein)
+    print("Sales Stock Protein:", sales_stock_protein)
 
     Schedule = MILP_Solver.main(
-        products_protein_per_month, products_inventory_protein, payload
+        products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein
     )
     return products_protein, products_protein_per_month, Schedule
 
