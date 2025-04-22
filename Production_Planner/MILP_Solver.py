@@ -1150,12 +1150,12 @@ def build_schedule_with_inventory(
             )
 
     # (D) Demand coverage: sum usage across all runs in month m >= demand
-    for p in products:
-        for m in range(1, TOTAL_MONTHS + 1):
-            model.Add(
-                sum(usage[(p, r, m)] for r in range(MAX_RUNS))
-                >= int(math.ceil(demand[p].get(m, 0)))
-            )
+    # for p in products:
+    #     for m in range(1, TOTAL_MONTHS + 1):
+    #         model.Add(
+    #             sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+    #             >= int(math.ceil(demand[p].get(m, 0)))
+    #         )
 
     serves = {}  # will index (product,run,month) → Bool
     for p in products:
@@ -1212,11 +1212,11 @@ def build_schedule_with_inventory(
 
                 month_end = m * DAYS_PER_MONTH  # e.g. if DAYS_PER_MONTH=30, month_end = 30, 60, 90, …
                 # 1) If run IS valid for month m, earliness >= (month_end − finish_time)
-                model.Add(var >= month_end - finish_time[(p,r)]) \
-                    .OnlyEnforceIf(isValid[(p,r,m)])
-                # 2) If run NOT valid, force earliness = 0
-                model.Add(var == 0) \
-                    .OnlyEnforceIf(isValid[(p,r,m)].Not())
+                model.Add(earliness[(p, r, m)] 
+                        == month_end - finish_time[(p, r)]) \
+                    .OnlyEnforceIf(serves[(p, r, m)])
+                model.Add(earliness[(p, r, m)] == 0) \
+                    .OnlyEnforceIf(serves[(p, r, m)].Not())
 
     for p in products:
         for r in range(MAX_RUNS):
@@ -1263,32 +1263,42 @@ def build_schedule_with_inventory(
 
     # 3) INVENTORY FLOW CONSTRAINTS
     # Inv_{p,m} = Inv_{p,m-1} + monthly_prod[p,m] - monthly_demand[p,m]
+    # --- INVENTORY WITH INITIAL STOCK DRIVES DEMAND COVERAGE ---
+    inventory = {}
     for p in products:
-        for m in range(1, TOTAL_MONTHS + 1):
-            if m == 1:
-                # inventory in month 1 = production in month 1 - demand
-                model.Add(
-                    inventory[(p, m)] == monthly_prod[(p, m)] - monthly_demand[p, m]
-                )
-            else:
-                model.Add(
-                    inventory[(p, m)]
-                    == inventory[(p, m - 1)]
-                    + monthly_prod[(p, m)]
-                    - monthly_demand[p, m]
-                )
-            # Nonnegative
-            # model.Add(inventory[(p, m)] >= (int(math.ceil(monthly_demand[p, m] / 3))))
+        for m in range(1, TOTAL_MONTHS+1):
+            inventory[(p, m)] = model.NewIntVar(0, bigM, f"inv_{p}_m{m}")
+
+    # month 1: start with existing stock + any usage in month 1
+    for p in products:
+        model.Add(
+            inventory[(p, 1)]
+            == products_inventory_protein[p]
+            + sum(usage[(p, r, 1)] for r in range(MAX_RUNS))
+            - int(math.ceil(demand[p].get(1, 0)))
+        )
+        # months 2…TOTAL_MONTHS
+        for m in range(2, TOTAL_MONTHS+1):
+            model.Add(
+                inventory[(p, m)]
+                == inventory[(p, m-1)]
+                + sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+                - int(math.ceil(demand[p].get(m, 0)))
+            )
+        # inventory can never go negative
+        for m in range(1, TOTAL_MONTHS+1):
+            model.Add(inventory[(p, m)] >= 0)
+
     
     # 1) sum up all earliness…
     total_earliness = model.NewIntVar(0, bigM * len(earliness), "total_earliness")
     model.Add(total_earliness == sum(earliness.values()))
 
     # e.g. α=1000 to give primary weight to earliness, β=1 to break ties by fewer runs
-    q = 1000
-    p = 1
+    a = 1000
+    b = 1
     obj = model.NewIntVar(-bigM, bigM, "obj")
-    model.Add(obj == q * total_earliness + p * sum(activate_run.values()))
+    model.Add(obj == a * total_earliness + b * sum(activate_run.values()))
     model.Minimize(obj)
 
     # min_stock = demand
@@ -1320,7 +1330,7 @@ def build_schedule_with_inventory(
     # Solve
     solver = cp_model.CpSolver()
     # solver.parameters.stop_after_first_solution = True
-    solver.parameters.max_time_in_seconds = 600
+    solver.parameters.max_time_in_seconds = 300
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
     solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
     solver.parameters.log_search_progress = True
