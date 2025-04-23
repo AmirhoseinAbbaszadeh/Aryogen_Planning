@@ -12,7 +12,7 @@ SHELF_LIFE = 24  # Shelf life in months
 DAYS_PER_MONTH = 30
 TOTAL_MONTHS = None
 BASE_DATE_FOR_PLANNING = None
-MAX_RUNS = 700  # Maximum number of production runs per product
+MAX_RUNS = 100  # Maximum number of production runs per product
 bigM = 1_000_000_000
 
 from datetime import datetime
@@ -1291,7 +1291,7 @@ def build_schedule_with_inventory(
 
     
     # 1) sum up all earliness…
-    total_earliness = model.NewIntVar(0, bigM * len(earliness), "total_earliness")
+    total_earliness = model.NewIntVar(0, DAYS_PER_MONTH*len(earliness), "total_earliness")
     model.Add(total_earliness == sum(earliness.values()))
 
     # e.g. α=1000 to give primary weight to earliness, β=1 to break ties by fewer runs
@@ -1330,11 +1330,11 @@ def build_schedule_with_inventory(
     # Solve
     solver = cp_model.CpSolver()
     # solver.parameters.stop_after_first_solution = True
-    solver.parameters.max_time_in_seconds = 300
+    solver.parameters.max_time_in_seconds = 2200
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
     solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
     solver.parameters.log_search_progress = True
-    solver.parameters.num_search_workers = 16
+    solver.parameters.num_search_workers = 8
     # solver.parameters.stop_after_first_solution = True
     status = solver.Solve(model)
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
@@ -1833,7 +1833,6 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
     
     return Inventory_Chart_Data
 
-
 def print_plan_with_preparation_stages(updated_plan):
     """
     Print the plan with any newly inserted "Prepare" stages before the main BioReactor stages.
@@ -1987,6 +1986,7 @@ def list_of_dicts_to_pdf(data, filename):
     c.save()
 
 def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein) -> str:
+    
     updated_plan = add_bioreactor_preparation_stages(final_plan)
     print_plan_with_preparation_stages(updated_plan)
     #################################################################################################
@@ -2023,6 +2023,7 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
 
     # Section 2: Aggregated Calendar-Based Inventory Summary
     Inventory_Chart_Data = print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
+    
     #################################################################################################
 
     return Inventory_Chart_Data
