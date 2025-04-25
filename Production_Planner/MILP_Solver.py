@@ -1295,7 +1295,7 @@ def build_schedule_with_inventory(
     model.Add(total_earliness == sum(earliness.values()))
 
     # e.g. α=1000 to give primary weight to earliness, β=1 to break ties by fewer runs
-    a = 10000
+    a = 11000
     b = 1
     obj = model.NewIntVar(-bigM, bigM, "obj")
     obj2 = model.NewIntVar(-bigM, bigM, "obj2")
@@ -1741,7 +1741,7 @@ def compute_new_prod(final_plan, max_period):
 
 
 # --- Production Runs Detail Report ---
-def print_production_runs_detail(final_plan):
+def print_production_runs_detail(final_plan) -> str:
     """
     Print a table showing details of each production run:
       - Run index, production line,
@@ -1751,6 +1751,8 @@ def print_production_runs_detail(final_plan):
       - The “leftover” (i.e. produced minus allocated usage),
       - And a summary of the monthly usage allocation.
     """
+    lines = []
+    lines.append("=== Production Runs Detail ===\n")
     print("\n=== Production Runs Detail ===")
     runs_by_product = {}
     for run in final_plan:
@@ -1758,10 +1760,13 @@ def print_production_runs_detail(final_plan):
         runs_by_product.setdefault(prod, []).append(run)
 
     for prod in sorted(runs_by_product.keys()):
-        print(f"\nProduct: {prod}")
+        print(f"Product: {prod}")
+        lines.append(f"Product: {prod}")
         header = f"{'Run':<4} {'Line':<6} {'Finish Date':<12} {'Finish Day':>10} {'Exp Date':<12} {'Protein':>10} {'Leftover':>10} {'Monthly Usage':>30}"
         print(header)
         print("-" * len(header))
+        lines.append(header)
+        lines.append("-" * len(header))
         sorted_runs = sorted(
             runs_by_product[prod],
             key=lambda x: (
@@ -1785,10 +1790,14 @@ def print_production_runs_detail(final_plan):
             print(
                 f"{run_idx:<4} {line_used!s:<6} {finish_date:<12} {finish_day:>10} {exp_date:<12} {produced_protein:>10.2f} {leftover:>10.2f} {usage_str:>30}"
             )
-
+            lines.append(
+                f"{run_idx:<4} {line_used!s:<6} {finish_date:<12} {finish_day:>10} {exp_date:<12} {produced_protein:>10.2f} {leftover:>10.2f} {usage_str:>30}"
+            )
+            lines.append("")
+    return "\n".join(lines)
 
 # --- Aggregated Calendar-Based Inventory Summary ---
-def print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein) -> dict:
+def print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein) -> list[dict, str]:
     """
     Print an aggregated, calendar-based inventory table per product.
     For each period (calculated as 30–day blocks using day_to_date),
@@ -1801,17 +1810,23 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
       - A balance (Inv Start + New Prod – Demand) with surplus/shortage annotation,
       - And the leftover (which here is the same as Inv End).
     """
+    lines = []
     Inventory_Chart_Data = {}
     # Assume new_prod is computed as before:
     new_prod = compute_new_prod(final_plan, max_period)
     inv_by_period = compute_inventory_by_period(final_plan, max_period, products_inventory_protein)
     print("\n=== Aggregated Calendar-Based Inventory Summary ===")
+    lines.append("\n=== Aggregated Calendar-Based Inventory Summary ===\n")
+    
     for prod in sorted(demand.keys()):
         Inventory_Chart_Data[prod] = {}
         print(f"\nProduct: {prod}")
+        lines.append(f"Product: {prod}")
         header = f"{'Period (Date Range)':<30} {'Demand':>10} {'New Prod':>10} {'Inv Start':>10} {'Inv End':>10} {'Balance':>20} {'Leftover':>10} {'Expired':>10}"
         print(header)
         print("-" * len(header))
+        lines.append(header)
+        lines.append("-" * len(header))
         for m in range(1, max_period + 1):
             period_start_date = day_to_date((m - 1) * 30)
             period_end_date = day_to_date(m * 30 - 1)
@@ -1833,9 +1848,15 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
             print(
                 f"{period_label:<30} {dem_val:>10} {np_val:>10.2f} {inv_start:>10.2f} {inv_end:>10.2f} {balance_text:>20} {inv_end:>10.2f} {expired:>10.2f}"
             )
+            lines.append(
+                f"{period_label:<30} {dem_val:>10} {np_val:>10.2f} {inv_start:>10.2f} {inv_end:>10.2f} {balance_text:>20} {inv_end:>10.2f} {expired:>10.2f}"
+            )
     print("\n=== End of Inventory Summary ===")
     
-    return Inventory_Chart_Data
+    lines.append("\n=== End of Inventory Summary ===")
+    lines = "\n".join(lines)
+    
+    return [Inventory_Chart_Data, lines]
 
 def print_plan_with_preparation_stages(updated_plan):
     """
@@ -1989,7 +2010,7 @@ def list_of_dicts_to_pdf(data, filename):
 
     c.save()
 
-def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein) -> str:
+def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein):
     
     updated_plan = add_bioreactor_preparation_stages(final_plan)
     print_plan_with_preparation_stages(updated_plan)
@@ -2023,14 +2044,14 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
     
 
     # Section 1: Detailed Production Runs
-    print_production_runs_detail(final_plan)
+    lines = print_production_runs_detail(final_plan)
 
     # Section 2: Aggregated Calendar-Based Inventory Summary
-    Inventory_Chart_Data = print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
+    front_payload = print_aggregated_inventory(final_plan, demand, max_period, products_inventory_protein)
     
     #################################################################################################
 
-    return Inventory_Chart_Data
+    return front_payload, lines
 
 # --- MODIFIED CODE in main() to handle AryoSeven_RC with a separate planner ---
 def main(total_products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein):
@@ -2203,7 +2224,7 @@ def main(total_products_protein_per_month, products_inventory_protein, payload, 
         inv_traj[k] = v
 
     
-    Inventory_Chart_Data = Output_Printers(combined_plan, inv_traj, demand_Sales, products_inventory_protein)
+    front_payload, lines = Output_Printers(combined_plan, inv_traj, demand_Sales, products_inventory_protein)
     # or build your final payload from combined results
     
     if demand_differences == {}:
@@ -2212,7 +2233,9 @@ def main(total_products_protein_per_month, products_inventory_protein, payload, 
     payload = {
         "status": "OK",
         "final_plan": combined_plan,
-        "inventory_trajectory": Inventory_Chart_Data,
+        "inventory_trajectory": front_payload[0],
+        "runs_detail": lines,
+        "detail_output": front_payload[1],
         "demand": demand_Sales,
         "demand_reduction": demand_differences,
         "feasible_capacity": demand_Sales,
