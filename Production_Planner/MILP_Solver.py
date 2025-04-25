@@ -13,7 +13,7 @@ DAYS_PER_MONTH = 30
 TOTAL_MONTHS = None
 BASE_DATE_FOR_PLANNING = None
 MAX_RUNS = 100  # Maximum number of production runs per product
-bigM = 1_000_000_000
+bigM = 1_000_000
 
 from datetime import datetime
 
@@ -1150,12 +1150,12 @@ def build_schedule_with_inventory(
             )
 
     # (D) Demand coverage: sum usage across all runs in month m >= demand
-    # for p in products:
-    #     for m in range(1, TOTAL_MONTHS + 1):
-    #         model.Add(
-    #             sum(usage[(p, r, m)] for r in range(MAX_RUNS))
-    #             >= int(math.ceil(demand[p].get(m, 0)))
-    #         )
+    for p in products:
+        for m in range(1, TOTAL_MONTHS + 1):
+            model.Add(
+                sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+                >= int(math.ceil(demand[p].get(m, 0)))
+            )
 
     serves = {}  # will index (product,run,month) → Bool
     for p in products:
@@ -1295,11 +1295,15 @@ def build_schedule_with_inventory(
     model.Add(total_earliness == sum(earliness.values()))
 
     # e.g. α=1000 to give primary weight to earliness, β=1 to break ties by fewer runs
-    a = 1000
+    a = 10000
     b = 1
     obj = model.NewIntVar(-bigM, bigM, "obj")
-    model.Add(obj == a * total_earliness + b * sum(activate_run.values()))
+    obj2 = model.NewIntVar(-bigM, bigM, "obj2")
+    # model.Add(obj == a * total_earliness + b * sum(activate_run.values()))
+    model.Add(obj == a * total_earliness)
+    model.Add(obj2 == b * sum(activate_run.values()))
     model.Minimize(obj)
+    model.Minimize(obj2)
 
     # min_stock = demand
     # print("Product Monthly Min Stock =>",min_stock)
@@ -1330,7 +1334,7 @@ def build_schedule_with_inventory(
     # Solve
     solver = cp_model.CpSolver()
     # solver.parameters.stop_after_first_solution = True
-    solver.parameters.max_time_in_seconds = 2200
+    solver.parameters.max_time_in_seconds = 800
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
     solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
     solver.parameters.log_search_progress = True
