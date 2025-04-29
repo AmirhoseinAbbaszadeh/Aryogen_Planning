@@ -29,7 +29,8 @@
             <!-- Add/Remove buttons -->
             <div class="selector-buttons">
               <button type="button" class="add-btn small" @click="addProduct">+ Add Product</button>
-              <button type="button" class="remove-btn small" :disabled="products.length === 0" @click="removeSelectedProduct">
+              <button type="button" class="remove-btn small" :disabled="products.length === 0"
+                @click="removeSelectedProduct">
                 Remove Product
               </button>
             </div>
@@ -95,18 +96,19 @@
         <div class="card">
           <h2>Current Stock</h2>
           <p class="info">
-            Select a product-dose (only those with entered monthly demand), enter the current amount, and specify the expiration offset.
+            Select a product-dose (only those with entered monthly demand), enter the current amount, and specify the
+            expiration offset.
           </p>
           <!-- Display the globally selected date -->
           <div class="selected-date">
             <div>
-                <strong>
-                    Selected Date => &nbsp;
-                    <span>
-                      <span v-if="selectedDate">{{ selectedDate }}</span>
-                      <span v-else style="color: red;">No date selected. Please Select the Production Date.</span>
-                    </span>
-                </strong>
+              <strong>
+                Selected Date => &nbsp;
+                <span>
+                  <span v-if="selectedDate">{{ selectedDate }}</span>
+                  <span v-else style="color: red;">No date selected. Please Select the Production Date.</span>
+                </span>
+              </strong>
             </div>
           </div>
           <div v-for="(entry, idx) in currentStocks" :key="idx" class="current-stock-entry">
@@ -119,17 +121,18 @@
             </select>
             <label>Current Amount:</label>
             <input type="number" v-model.number="entry.amount" placeholder="Current amount" />
-            
+
             <label>Expiration Offset (months):</label>
             <input type="number" v-model.number="entry.expirationOffsetMonths" placeholder="Enter offset in months" />
 
             <label>Expiration Offset (days):</label>
             <input type="number" v-model.number="entry.expirationOffsetDays" placeholder="Enter offset in days" />
-            
+
             <div class="calculated-expiration">
               <strong>Calculated Expiration Date => &nbsp;</strong>
               <span>
-                {{ calculateExpiration(selectedDate, entry.expirationOffsetMonths, entry.expirationOffsetDays) || 'N/A' }}
+                {{ calculateExpiration(selectedDate, entry.expirationOffsetMonths, entry.expirationOffsetDays) || 'N/A'
+                }}
               </span>
             </div>
             <button type="button" class="remove-btn small" @click="removeCurrentStock(idx)">Remove</button>
@@ -153,11 +156,11 @@
             </option>
           </select>
 
-            <label>Finish Offset (months):</label>
-            <input type="number" v-model.number="entry.finishOffsetMonths" placeholder="Offset months" />
+          <label>Finish Offset (months):</label>
+          <input type="number" v-model.number="entry.finishOffsetMonths" placeholder="Offset months" />
 
-            <label>Finish Offset (days):</label>
-            <input type="number" v-model.number="entry.finishOffsetDays" placeholder="Offset days" />
+          <label>Finish Offset (days):</label>
+          <input type="number" v-model.number="entry.finishOffsetDays" placeholder="Offset days" />
 
           <div class="calculated-finish">
             <strong>Calculated Finish Date => &nbsp;</strong>
@@ -216,6 +219,19 @@
       <pre class="json-box">{{ JSON.stringify(feasible_capacity, null, 2) }}</pre>
     </div>
 
+    <!-- Full text report (preserves your “=== Production Runs Detail ===” layout) -->
+    <div v-if="runs_detail" class="results">
+      <h2>Full Runs Report</h2>
+      <pre class="schedule-box">{{ runs_detail }}</pre>
+    </div>
+
+    <!-- Full text report (preserves your “=== Production Runs Detail ===” layout) -->
+    <div v-if="reportText" class="results">
+      <h2>Full Inventory Report</h2>
+      <pre class="schedule-box">{{ reportText }}</pre>
+    </div>
+
+
     <!-- Timeline Chart using our interactive component -->
     <div v-if="planResult && planResult.planner && planResult.planner.final_plan" class="chart-container">
       <h2>Production Timeline Chart</h2>
@@ -229,7 +245,7 @@
     </div>
   </div>
 
-  
+
 </template>
 
 
@@ -238,6 +254,7 @@ import axios from "axios";
 import Datepicker from 'vue3-datepicker';
 import GanttChart from '@/components/GanttChart.vue';
 import InventoryChart from '@/components/InventoryChart.vue';
+
 
 export default {
   name: "FullPlanScheduler",
@@ -421,6 +438,8 @@ export default {
       customFormat: 'dd/MM/yyyy',
       inventoryData: [],
       currentStocks: [],
+      reportText: "",
+      runs_detail: "",
       initialExpiry: {
         // e.g. 
         // "Altebrel": "01/06/2025",
@@ -524,7 +543,7 @@ export default {
         expirationOffsetDays: 0, // User enters number of months offset
         expirationDate: "", // This is where the expiration date will be stored
       };
-      
+
       this.currentStocks.push(newEntry);
     },
 
@@ -625,9 +644,9 @@ export default {
         const initialExpiry = {};
         this.currentStocks.forEach(entry => {
           if (!entry.productDose) return;
-          
+
           const [product] = entry.productDose.split('|');
-          
+
           // only keep the first one if user entered multiple for the same product
           if (!initialExpiry[product]) {
             const expiration = entry.expirationDate || this.calculateExpiration(
@@ -635,7 +654,7 @@ export default {
               entry.expirationOffsetMonths,
               entry.expirationOffsetDays
             );
-            
+
             initialExpiry[product] = expiration; // Assign the expiration date
           }
         });
@@ -662,9 +681,11 @@ export default {
         };
 
         // Send the filtered data to the backend
-        const response = await axios.post("http://127.0.0.1:8100/api/plan/", postData);
+        const response = await axios.post("http://127.0.0.1:8200/api/plan/", postData);
         this.planResult = response.data;
         this.planner = response.data.planner;
+        this.reportText = response.data.planner.detail_output || "";
+        this.runs_detail = response.data.planner.runs_detail || "";
         this.demand_reduction = response.data.Reduced_Demand;
         this.Initial_Inventory_Amount = response.data.Initial_Inventory_Amount;
         this.feasible_capacity = response.data.Feasible_Demand;
@@ -683,7 +704,7 @@ export default {
     },
   },
   mounted() {
-    axios.get("http://127.0.0.1:8100/api/lines")
+    axios.get("http://127.0.0.1:8200/api/lines")
       .then(response => {
         const commonLines = response.data.Common_Lines;
         const options = [];
@@ -702,7 +723,7 @@ export default {
         console.error("Error loading lines:", err);
         // Provide a fallback if needed (e.g., default to lines 0–6)
         this.availableLines = [0, 1, 2, 3, 4, 5, 6];
-    });
+      });
   }
 };
 </script>
@@ -737,6 +758,7 @@ body {
   padding: 10px;
   border-radius: 5px;
 }
+
 .selected-date {
   margin-bottom: 15px;
   padding: 8px;
@@ -745,16 +767,19 @@ body {
   border-radius: 5px;
   font-size: 14px;
 }
+
 .calculated-expiration {
   margin-top: 5px;
   font-size: 14px;
 }
+
 .busy-line-entry {
   margin-bottom: 15px;
   border: 1px solid #e0e0e0;
   padding: 10px;
   border-radius: 5px;
 }
+
 .calculated-finish {
   margin-top: 5px;
   font-size: 14px;

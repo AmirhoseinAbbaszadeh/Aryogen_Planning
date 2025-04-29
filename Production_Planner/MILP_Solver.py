@@ -1294,52 +1294,57 @@ def build_schedule_with_inventory(
     total_earliness = model.NewIntVar(0, DAYS_PER_MONTH*len(earliness), "total_earliness")
     model.Add(total_earliness == sum(earliness.values()))
 
+    # pre-compute line volumes (liters → grams):
+    line_capacity = {
+        (p, l): int(line_final_vol[(p, l)] * product_factor[p] / 1000.0)
+        for p in products
+        for l in product_lines[p]
+    }
+
+    # build a linear expression for “total run capacity”:
+    cap_penalty = []
+    for p in products:
+        for r in range(MAX_RUNS):
+            for l in product_lines[p]:
+                cap_penalty.append(
+                    line_capacity[(p, l)] * use_line[(p, r, l)]
+                )
+
+
+
     # e.g. α=1000 to give primary weight to earliness, β=1 to break ties by fewer runs
-    a = 11000
-    b = 1
-    obj = model.NewIntVar(-bigM, bigM, "obj")
-    obj2 = model.NewIntVar(-bigM, bigM, "obj2")
+    a = 3
+    b = 2
+    c = 1 # tiny weight compared to your a/b
+
+    model.Minimize(
+        a*total_earliness +
+        b*sum(activate_run.values()) +
+        c*sum(cap_penalty)
+    )
+    
+    # obj = model.NewIntVar(0, bigM, "obj")
+    # obj2 = model.NewIntVar(0, bigM, "obj2")
+    # obj3 = model.NewIntVar(0, bigM, "obj3")
+
     # model.Add(obj == a * total_earliness + b * sum(activate_run.values()))
-    model.Add(obj == a * total_earliness)
-    model.Add(obj2 == b * sum(activate_run.values()))
-    model.Minimize(obj)
-    model.Minimize(obj2)
-
-    # min_stock = demand
-    # print("Product Monthly Min Stock =>",min_stock)
-    # # Suppose min_stock[p][m] = X means you want inventory of product p in month m >= X
-    # for p in products:
-    #     for m in range(1, TOTAL_MONTHS + 1):
-    #         required_min = min_stock.get(p, {}).get(m, 0)
-    #         print(required_min)
-    #         # if required_min > 0:
-    #         #     model.Add(inventory[(p, m)] >= required_min)
-
-
-    # 4) MAKESPAN + PRODUCTION OBJECTIVE
-    # all_finish = [finish_time[(p, r)] for p in products for r in range(MAX_RUNS)]
-    # global_makespan = model.NewIntVar(NEGATIVE_BOUND, 50000, "makespan")
-    # model.AddMaxEquality(global_makespan, all_finish)
-
-    # total_production = model.NewIntVar(0, bigM, "total_production")
-    # model.Add(
-    #     total_production
-    #     == sum(produced_protein_int[(p, r)] for p in products for r in range(MAX_RUNS))
-    # )
-
-    # model.Minimize(global_makespan + 1000 * total_production)
-
-    # ========== END MODIFIED SECTION ==========
+    # model.Add(obj == a * total_earliness)
+    # model.Add(obj3 == c * sum(cap_penalty))
+    # model.Add(obj2 == b * sum(activate_run.values()))
+    # model.Minimize(obj)
+    # model.Minimize(obj3)
+    # model.Minimize(obj2)
 
     # Solve
     solver = cp_model.CpSolver()
-    # solver.parameters.stop_after_first_solution = True
-    solver.parameters.max_time_in_seconds = 800
+    solver.parameters.max_time_in_seconds = 5500
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
+    solver.parameters.cp_model_probing_level = 2    # 0=off, 1=light, 2=strengthened
     solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
     solver.parameters.log_search_progress = True
-    solver.parameters.num_search_workers = 8
+    solver.parameters.num_search_workers = 6
     # solver.parameters.stop_after_first_solution = True
+    
     status = solver.Solve(model)
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         print("No feasible solution.")
