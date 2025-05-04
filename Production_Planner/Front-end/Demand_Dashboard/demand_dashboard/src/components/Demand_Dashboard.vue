@@ -202,7 +202,6 @@
     </div>
 
 
-    <!-- Show the demand reduction (differences) -->
     <div v-if="Initial_Inventory_Amount" class="results">
       <h2>Initial Inventory Amount</h2>
       <pre class="json-box">{{ JSON.stringify(Initial_Inventory_Amount, null, 2) }}</pre>
@@ -226,26 +225,34 @@
     </div>
 
     <!-- Full text report (preserves your “=== Production Runs Detail ===” layout) -->
+    <div v-if="lines_detail" class="results">
+      <h2>Full Stages Report</h2>
+      <pre class="schedule-box">{{ lines_detail }}</pre>
+    </div>
+    
+    <!-- Full text report (preserves your “=== Production Runs Detail ===” layout) -->
     <div v-if="reportText" class="results">
       <h2>Full Inventory Report</h2>
       <pre class="schedule-box">{{ reportText }}</pre>
     </div>
-
-
+    
+    
     <!-- Timeline Chart using our interactive component -->
     <div v-if="planResult && planResult.planner && planResult.planner.final_plan" class="chart-container">
       <h2>Production Timeline Chart</h2>
       <GanttChart :planData="planResult.planner.final_plan" />
     </div>
-
+    
     <!-- Inventory Chart (if your payload includes inventory_trajectory) -->
     <div v-if="planResult && planResult.planner.inventory_trajectory" class="chart-container">
       <h2>Inventory Trend Chart</h2>
       <InventoryChart :inventoryData="planResult.planner.inventory_trajectory" />
     </div>
+    
+    <ColumnBarChart
+      :linesdetail="reportText"
+    />
   </div>
-
-
 </template>
 
 
@@ -254,13 +261,14 @@ import axios from "axios";
 import Datepicker from 'vue3-datepicker';
 import GanttChart from '@/components/GanttChart.vue';
 import InventoryChart from '@/components/InventoryChart.vue';
+import ColumnBarChart from "@/components/ColumnBarChart.vue";
 
 
 export default {
   name: "FullPlanScheduler",
   components: {
     Datepicker,
-    GanttChart, InventoryChart
+    GanttChart, InventoryChart, ColumnBarChart
   },
   data() {
     return {
@@ -440,6 +448,7 @@ export default {
       currentStocks: [],
       reportText: "",
       runs_detail: "",
+      lines_detail: "",
       initialExpiry: {
         // e.g. 
         // "Altebrel": "01/06/2025",
@@ -686,6 +695,7 @@ export default {
         this.planner = response.data.planner;
         this.reportText = response.data.planner.detail_output || "";
         this.runs_detail = response.data.planner.runs_detail || "";
+        this.lines_detail = response.data.planner.lines_detail || "";
         this.demand_reduction = response.data.Reduced_Demand;
         this.Initial_Inventory_Amount = response.data.Initial_Inventory_Amount;
         this.feasible_capacity = response.data.Feasible_Demand;

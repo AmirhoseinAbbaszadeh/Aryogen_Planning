@@ -7,6 +7,7 @@ from ortools.sat.python import cp_model
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from textwrap import indent
 
 SHELF_LIFE = 24  # Shelf life in months
 DAYS_PER_MONTH = 30
@@ -1337,7 +1338,7 @@ def build_schedule_with_inventory(
 
     # Solve
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 5500
+    solver.parameters.max_time_in_seconds = 200
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
     solver.parameters.cp_model_probing_level = 2    # 0=off, 1=light, 2=strengthened
     solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
@@ -1863,7 +1864,7 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
     
     return [Inventory_Chart_Data, lines]
 
-def print_plan_with_preparation_stages(updated_plan):
+def print_plan_with_preparation_stages(updated_plan) -> str:
     """
     Print the plan with any newly inserted "Prepare" stages before the main BioReactor stages.
     Assumes each run in updated_plan has:
@@ -1874,17 +1875,20 @@ def print_plan_with_preparation_stages(updated_plan):
       - 'finish_date'
       - 'br_stages' (a list of stages, each with 'stage', 'start_day', 'end_day', 'start_date', 'end_date')
     """
-    from textwrap import indent
 
-    # Group the runs by product for a cleaner display.
-    runs_by_product = {}
+
+    lines: list[str] = []
+    runs_by_product: dict[str, list] = {}
+
     for run in updated_plan:
         prod = run["product"]
         runs_by_product.setdefault(prod, []).append(run)
 
+    lines.append("\n=== UPDATED PLAN WITH PREPARATION STAGES ===")
     print("\n=== UPDATED PLAN WITH PREPARATION STAGES ===")
     for prod in sorted(runs_by_product.keys()):
         print(f"\nProduct: {prod}")
+        lines.append(f"\nProduct: {prod}")
         # Sort runs by finish_day for consistency
         sorted_runs = sorted(
             runs_by_product[prod], key=lambda x: x.get("finish_day", 0)
@@ -1897,6 +1901,10 @@ def print_plan_with_preparation_stages(updated_plan):
             produced_protein = run.get("produced_protein", 0)
 
             print(
+                f"  Run={run_idx}, Line={line_used}, FinishDay={finish_day} ({finish_date}), "
+                f"Protein={produced_protein:.2f}"
+            )
+            lines.append(
                 f"  Run={run_idx}, Line={line_used}, FinishDay={finish_day} ({finish_date}), "
                 f"Protein={produced_protein:.2f}"
             )
@@ -1918,7 +1926,17 @@ def print_plan_with_preparation_stages(updated_plan):
                         prefix="    ",
                     )
                 )
+                lines.append(
+                    indent(
+                        f"- Stage={st_name}, "
+                        f"StartDay=({st_start_day}), EndDay=({st_end_day}), "
+                        f"StartDate=({st_start_date}), EndDate=({st_end_date})",
+                        prefix="    ",
+                    )
+                )
+            lines.append("")
             print()  # blank line after each run
+    return "\n".join(lines)
 
 
 def add_bioreactor_preparation_stages(final_plan):
@@ -2018,7 +2036,7 @@ def list_of_dicts_to_pdf(data, filename):
 def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, products_inventory_protein):
     
     updated_plan = add_bioreactor_preparation_stages(final_plan)
-    print_plan_with_preparation_stages(updated_plan)
+    lines_detail = print_plan_with_preparation_stages(updated_plan)
     #################################################################################################
 
     #################################################################################################
@@ -2056,7 +2074,7 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
     
     #################################################################################################
 
-    return front_payload, lines
+    return front_payload, lines, lines_detail
 
 # --- MODIFIED CODE in main() to handle AryoSeven_RC with a separate planner ---
 def main(total_products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein):
@@ -2229,7 +2247,7 @@ def main(total_products_protein_per_month, products_inventory_protein, payload, 
         inv_traj[k] = v
 
     
-    front_payload, lines = Output_Printers(combined_plan, inv_traj, demand_Sales, products_inventory_protein)
+    front_payload, lines, lines_detail = Output_Printers(combined_plan, inv_traj, demand_Sales, products_inventory_protein)
     # or build your final payload from combined results
     
     if demand_differences == {}:
@@ -2240,6 +2258,7 @@ def main(total_products_protein_per_month, products_inventory_protein, payload, 
         "final_plan": combined_plan,
         "inventory_trajectory": front_payload[0],
         "runs_detail": lines,
+        "lines_detail": lines_detail,
         "detail_output": front_payload[1],
         "demand": demand_Sales,
         "demand_reduction": demand_differences,
