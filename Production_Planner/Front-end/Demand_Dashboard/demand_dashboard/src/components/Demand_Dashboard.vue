@@ -207,12 +207,6 @@
       <pre class="json-box">{{ JSON.stringify(Initial_Inventory_Amount, null, 2) }}</pre>
     </div>
 
-    <!-- Show the demand reduction (differences) -->
-    <div v-if="demand_reduction" class="results">
-      <h2>Demand Reductions</h2>
-      <pre class="json-box">{{ JSON.stringify(demand_reduction, null, 2) }}</pre>
-    </div>
-
     <div v-if="feasible_capacity" class="results">
       <h2>Plan made by demands below:</h2>
       <pre class="json-box">{{ JSON.stringify(feasible_capacity, null, 2) }}</pre>
@@ -592,7 +586,6 @@ export default {
       this.error = null;
       this.planResult = null;
       this.planner = null;
-      this.demand_reduction = null;
       this.Initial_Inventory_Amount = null;
       this.feasible_capacity = null;
       this.timeline_chart = null;  // Reset the timeline chart image
@@ -696,7 +689,6 @@ export default {
         this.reportText = response.data.planner.detail_output || "";
         this.runs_detail = response.data.planner.runs_detail || "";
         this.lines_detail = response.data.planner.lines_detail || "";
-        this.demand_reduction = response.data.Reduced_Demand;
         this.Initial_Inventory_Amount = response.data.Initial_Inventory_Amount;
         this.feasible_capacity = response.data.Feasible_Demand;
 

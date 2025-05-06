@@ -524,19 +524,10 @@ async def receive_plan(payload: PlanPayload) -> Dict[str, Any]:
     return {
         "planner": planner["Schedule"],
         "demand": planner["Schedule"]["demand"],
-        "Reduced_Demand": planner["Schedule"]["demand_reduction"],
         "Feasible_Demand": planner["Schedule"]["feasible_capacity"],
         "Initial_Inventory_Amount": planner["Schedule"]["initial_stock"],
     }
-    # payload = {
-    #     "status": "OK",
-    #     "final_plan": combined_plan,
-    #     "inventory_trajectory": inv_traj,
-    #     "demand": demand,
-    #     "demand_reduction": demand_differences,
-    #     "feasible_capacity": adjusted_demand,
-    #     "initial_stock": initial_stock,
-    # }
+
 
 @app.get("/api/lines")
 async def get_lines() -> Dict[str, Any]:
