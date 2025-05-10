@@ -330,10 +330,6 @@ def Products_Protein(
                 export_stock_protein[prdct].setdefault(month, 0.0)
                 export_stock_protein[prdct][month] += grams
 
-                # also add into combined total
-                products_protein[prdct].setdefault(month, 0.0)
-                products_protein[prdct][month] += grams
-
     # 2) SALES side
     for prdct, doses_dict in payload.Sales_Stocks.items():
         sales_stock_protein.setdefault(prdct, {})
@@ -350,14 +346,6 @@ def Products_Protein(
                 sales_stock_protein[prdct].setdefault(month, 0.0)
                 sales_stock_protein[prdct][month] += grams
 
-                # also add into combined total
-                products_protein[prdct].setdefault(month, 0.0)
-                products_protein[prdct][month] += grams
-
-
-
-    
-
     # 3) INVENTORY (unchanged)
     for prod_dose, stock_amount in init_stock.items():
         prdct, dose_val = prod_dose.split()
@@ -367,37 +355,14 @@ def Products_Protein(
         products_inventory_protein.setdefault(prdct, 0)
         products_inventory_protein[prdct] += int(math.ceil(grams))
     
-    # for prdct, doses_dict in payload.Min_Stock.items():
-    #     dose_need_protein = 0
-    #     for x_dose, month_demand in doses_dict.items():
-    #         total_demand = sum(month_demand.values())
-    #         numeric_dose = float(x_dose) if "." in x_dose else int(x_dose)
-    #         mg_per_container = _search_dose(prdct, numeric_dose)
-    #         dose_need_protein += total_demand * mg_per_container * 0.001
 
-    #         for month in month_demand.items():
-    #             num = month[1] * mg_per_container * 0.001
-    #             num = f"{num:.2f}"
-    #             products_protein_per_month[f"{prdct} {x_dose} {month[0]}"] = float(num)
-
-    #         for prodct, stock_amount in init_stock.items():
-    #             if prodct == f"{prdct} {numeric_dose}":
-    #                 stock_amount = stock_amount * mg_per_container * 0.001
-    #                 products_inventory_protein[f"{prdct}"] = products_inventory_protein[f"{prdct}"] + int(math.ceil(stock_amount))
-    #                 continue
-            
-    #     products_protein[prdct] = dose_need_protein
-
-    # print(products_inventory_protein)
-
-    print("Products Protein:", products_protein)
     print("Export Stock Protein:", export_stock_protein)
     print("Sales Stock Protein:", sales_stock_protein)
 
     Schedule = MILP_Solver.main(
         products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein
     )
-    return products_protein, products_protein_per_month, Schedule
+    return products_protein_per_month, Schedule
 
 
 def Planner(payload: PlanPayload) -> dict[str, Dict[str, float]]:
@@ -410,11 +375,10 @@ def Planner(payload: PlanPayload) -> dict[str, Dict[str, float]]:
         production_plan: dictionary with the total and monthly protein values for each product
 
     """
-    Products_Protein_total, Products_Protein_per_month, Schedule = Products_Protein(
+    Products_Protein_per_month, Schedule = Products_Protein(
         payload=payload
     )
     production_plan = {
-        "Total Protein": Products_Protein_total,
         "Monthly Protein": Products_Protein_per_month,
         "Schedule": Schedule,
     }

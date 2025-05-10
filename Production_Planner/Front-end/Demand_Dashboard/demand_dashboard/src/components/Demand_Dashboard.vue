@@ -683,7 +683,7 @@ export default {
         };
 
         // Send the filtered data to the backend
-        const response = await axios.post("http://127.0.0.1:8200/api/plan/", postData);
+        const response = await axios.post("http://127.0.0.1:8100/api/plan/", postData);
         this.planResult = response.data;
         this.planner = response.data.planner;
         this.reportText = response.data.planner.detail_output || "";
@@ -706,7 +706,7 @@ export default {
     },
   },
   mounted() {
-    axios.get("http://127.0.0.1:8200/api/lines")
+    axios.get("http://127.0.0.1:8100/api/lines")
       .then(response => {
         const commonLines = response.data.Common_Lines;
         const options = [];

@@ -4,7 +4,7 @@ import uuid
 from collections import deque
 from datetime import date, datetime, timedelta
 from ortools.sat.python import cp_model
-
+import pandas as pd
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from textwrap import indent
@@ -195,27 +195,7 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
     # So each run might take cell_thaw_time + total_tf_time days:
     run_duration = cell_thaw_time + total_tf_time
 
-    # We'll create a chain of runs with no overlap, for example:
-    # (In real code, you might do more constraints to handle parallel runs or resource usage.)
-    # prev_end = model.NewIntVar(0, bigM, "prev_end_init")
-    # model.Add(prev_end == 0)  # Start at day 0
-    # for r in range(MAX_RUNS):
-    #     st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r}")
-    #     en = finish_time[r]
-    #     # If run is used => st >= prev_end
-    #     model.Add(st >= prev_end).OnlyEnforceIf(use_run[r])
-    #     # If run is not used => st = 0, en = 0
-    #     model.Add(st == 0).OnlyEnforceIf(use_run[r].Not())
-    #     model.Add(en == st + run_duration - 1).OnlyEnforceIf(use_run[r])
 
-    #     # Link prev_end for the next run:
-    #     if r < MAX_RUNS - 1:
-    #         next_st = model.NewIntVar(0, bigM, f"start_aryoSevenRC_{r + 1}")
-    #         model.Add(prev_end == en + 1).OnlyEnforceIf(use_run[r])
-    #         # If run[r] is not used, we keep prev_end the same. So let's do something like:
-    #         tmp = model.NewIntVar(0, bigM, f"tmp_{r}")
-    #         model.Add(tmp == prev_end).OnlyEnforceIf(use_run[r].Not())
-    #         # But to keep it simple, we skip advanced logic here.
     start_vars = {}    # Dictionary to hold independent start times
     for r in range(MAX_RUNS):
         use_run[r] = model.NewBoolVar(f"run_aryoSevenRC_{r}")
@@ -283,7 +263,7 @@ def build_schedule_for_AryoSevenRC(data: dict, demand: dict[str, dict]):
         for m in range(1, TOTAL_MONTHS + 1):
             valid = isValid[(r, m)]
             month_end = m * 30
-            month_start = (m - 1) * 30
+            month_start = (m - 1) * 30 + 1
             model.Add(F <= month_end).OnlyEnforceIf(valid)
             model.Add(E > month_start).OnlyEnforceIf(valid)
             # usage zero if not valid
@@ -761,22 +741,6 @@ def build_schedule_with_inventory(
                             fu_prev_end = model.NewIntVar(NEGATIVE_BOUND, 50000, f"fu_ref_{p}_{r}_l{l_id}_{stage_key}")
                             model.Add(fu_prev_end == last_stage_end + 2)
 
-                            # found_key = None
-                            # max_candidates = 10  # adjust this value as necessary
-                            # for idx in range(1, max_candidates + 1):
-                            #     key_normal = (p, r, l_id, stage_key, idx)
-                            #     key_ss = (p, r, l_id, stage_key, 1000 + idx)
-                            #     if key_normal in mab_vars:
-                            #         found_key = key_normal
-                            #         break
-                            #     elif key_ss in mab_vars:
-                            #         found_key = key_ss
-                            #         break
-                            # if found_key is None:
-                            #     raise KeyError(f"No Mab or SS stage found for keys with base {(p, r, l_id, stage_key)} up to {max_candidates}")
-
-                            # # Use the found reference end time to set fu_prev_end (with your desired offset, here +2)
-                            # model.Add(fu_prev_end == mab_vars[found_key][1] + 2)
 
                             for fu_name in fu_stage_order:
 
@@ -1103,19 +1067,12 @@ def build_schedule_with_inventory(
             model.Add(diff == plit * f_int - prot * 1000)
             model.Add(diff < 1000)
 
-    # ================================
-    # INVENTORY + PARTIAL USAGE (Scenario B)
-    # ================================
-
-    # 1) Remove the old b_run_expires_month approach
-    #    Remove usage of "expires_this_month", "sum(...)=1", etc.
 
     usage = {}
     expiration_date = {}
     isValid = {}
 
     # (A) Create expiration_date
-
     for p in products:
         for r in range(MAX_RUNS):
             exp_date = model.NewIntVar(0, bigM, f"exp_{p}_{r}")
@@ -1140,8 +1097,8 @@ def build_schedule_with_inventory(
                 model.Add(usage[(p, r, m)] > 0).OnlyEnforceIf(sm)
                 model.Add(usage[(p, r, m)] == 0).OnlyEnforceIf(sm.Not())
                 # And enforce the no‐spill constraint:
-                month_end = m * DAYS_PER_MONTH
-                model.Add(finish_time[(p, r)] <= month_end).OnlyEnforceIf(sm)
+                month_start = (m - 1) * DAYS_PER_MONTH + 1
+                model.Add(finish_time[(p, r)] <= month_start).OnlyEnforceIf(sm)
 
     # (C) Link total usage to produced_protein_int
     for p in products:
@@ -1182,13 +1139,13 @@ def build_schedule_with_inventory(
             F = finish_time[(p, r)]  # day production finishes
             E = expiration_date[(p, r)]
             for m in range(1, TOTAL_MONTHS + 1):
-                month_start = (30 * (m - 1))
+                month_start = (30 * (m - 1)) + 1
                 month_end = (30 * m) - 1
                 valid = isValid[(p, r, m)]
 
                 # If valid=1 => run finishes on/before month_end AND not expired before month_start
-                model.Add(F <= month_end).OnlyEnforceIf(valid)
-                model.Add(E > month_start).OnlyEnforceIf(valid)
+                model.Add(F < month_start).OnlyEnforceIf(valid)
+                # model.Add(E > month_start).OnlyEnforceIf(valid)
 
     # Force usage to 0 if not valid
     for p in products:
@@ -1205,10 +1162,10 @@ def build_schedule_with_inventory(
                 var = model.NewIntVar(0, bigM, f"earliness_{p}_{r}_m{m}")
                 earliness[(p,r,m)] = var
 
-                month_end = m * DAYS_PER_MONTH  # e.g. if DAYS_PER_MONTH=30, month_end = 30, 60, 90, …
-                # 1) If run IS valid for month m, earliness >= (month_end − finish_time)
+                month_start = (m-1) * DAYS_PER_MONTH + 1 # e.g. if DAYS_PER_MONTH=30, month_start = 30, 60, 90, …
+                # 1) If run IS valid for month m, earliness >= (month_start − finish_time)
                 model.Add(earliness[(p, r, m)] 
-                        == month_end - finish_time[(p, r)]) \
+                        == month_start - finish_time[(p, r)]) \
                     .OnlyEnforceIf(serves[(p, r, m)])
                 model.Add(earliness[(p, r, m)] == 0) \
                     .OnlyEnforceIf(serves[(p, r, m)].Not())
@@ -1216,9 +1173,9 @@ def build_schedule_with_inventory(
     for p in products:
         for r in range(MAX_RUNS):
             for m in range(1, TOTAL_MONTHS+1):
-                month_start = (m - 1) * DAYS_PER_MONTH # e.g. 1, 31, 61, …
-                month_end = m * DAYS_PER_MONTH - 1 # e.g. 30, 60, 90, …
-                model.Add(finish_time[(p,r)] <= month_end)\
+                month_start = (m - 1) * DAYS_PER_MONTH + 1# e.g. 1, 31, 61, …
+                # month_end = m * DAYS_PER_MONTH - 1 # e.g. 30, 60, 90, …
+                model.Add(finish_time[(p,r)] < month_start)\
                     .OnlyEnforceIf(serves[(p,r,m)])
 
     # 2) DEFINE MONTH-TO-MONTH INVENTORY
@@ -1269,12 +1226,12 @@ def build_schedule_with_inventory(
             )
         # inventory can never go negative
         for m in range(1, TOTAL_MONTHS+1):
-            model.Add(inventory[(p, m)] >= abs(int((monthly_demand[p, m] - export_stocks_protein[p][m]) // 3)))
-            # model.Add(inventory[(p, m)] >= 0)
+            # model.Add(inventory[(p, m)] >= abs(int((monthly_demand[p, m] - export_stocks_protein[p][m]) // 3)))
+            model.Add(inventory[(p, m)] >= 0)
 
     
     # 1) sum up all earliness…
-    total_earliness = model.NewIntVar(0, DAYS_PER_MONTH*len(earliness), "total_earliness")
+    total_earliness = model.NewIntVar(0, MAX_RUNS * DAYS_PER_MONTH * len(earliness), "total_earliness")
     model.Add(total_earliness == sum(earliness.values()))
 
     # pre-compute line volumes (liters → grams):
@@ -1293,22 +1250,20 @@ def build_schedule_with_inventory(
                     line_capacity[(p, l)] * use_line[(p, r, l)]
                 )
 
-
-
     # e.g. α=1000 to give primary weight to earliness, β=1 to break ties by fewer runs
     a = 3
-    b = 2
-    c = 1 # tiny weight compared to your a/b
+    # b = 2
+    c = 2 # tiny weight compared to your a/b
 
     model.Minimize(
+        # b*sum(activate_run.values()) +
         a*total_earliness +
-        b*sum(activate_run.values()) +
         c*sum(cap_penalty)
     )
 
     # Solve
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 100
+    solver.parameters.max_time_in_seconds = 400
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
     solver.parameters.cp_model_probing_level = 2    # 0=off, 1=light, 2=strengthened
     solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
@@ -1494,12 +1449,15 @@ def build_schedule_with_inventory(
             if release_day is None:
                 release_day = fday
 
+            start_date = br_stages[0]['start_date']
+
             # Build the final plan dictionary (no longer using a single production month)
             final_plan.append(
                 {
                     "product": p,
                     "run_index": r,
                     "line_used": used_line_id,
+                    "start_date": start_date,
                     "finish_day": fday,
                     "finish_date": finish_date_str,
                     "monthly_usage": monthly_usage,  # new field with a month->usage mapping
@@ -1658,6 +1616,7 @@ def print_production_runs_detail(final_plan) -> str:
       - And a summary of the monthly usage allocation.
     """
     lines = []
+    Data_Json = []
     lines.append("=== Production Runs Detail ===\n")
     print("\n=== Production Runs Detail ===")
     runs_by_product = {}
@@ -1668,7 +1627,7 @@ def print_production_runs_detail(final_plan) -> str:
     for prod in sorted(runs_by_product.keys()):
         print(f"Product: {prod}")
         lines.append(f"Product: {prod}")
-        header = f"{'Run':<4} {'Line':<6} {'Finish Date':<12} {'Finish Day':>10} {'Exp Date':<12} {'Protein':>10} {'Leftover':>10} {'Monthly Usage':>30}"
+        header = f"{'Run':<4} {'Line':<6} {'Start Date':<12} {'Finish Date':<12} {'Finish Day':>10} {'Exp Date':<12} {'Protein':>10} {'Liter':<12} {'Leftover':>10} {'Monthly Usage':>30}"
         print(header)
         print("-" * len(header))
         lines.append(header)
@@ -1683,6 +1642,8 @@ def print_production_runs_detail(final_plan) -> str:
         for run in sorted_runs:
             run_idx = run.get("run_index", "N/A")
             line_used = run.get("line_used", "N/A")
+            liter = run.get("liters", "N/A")
+            start_date = run.get("start_date", "N/A")
             finish_day = run.get("finish_day", 0)
             finish_date = run.get("finish_date", "N/A")
             exp_date = run.get("expiration_date_str", "N/A")
@@ -1694,12 +1655,21 @@ def print_production_runs_detail(final_plan) -> str:
                 ", ".join(f"{k}:{v}" for k, v in usage.items()) if usage else "None"
             )
             print(
-                f"{run_idx:<4} {line_used!s:<6} {finish_date:<12} {finish_day:>10} {exp_date:<12} {produced_protein:>10.2f} {leftover:>10.2f} {usage_str:>30}"
+                f"{run_idx:<4} {line_used!s:<6} {start_date:<12} {finish_date:<12} {finish_day:>10} {exp_date:<12} {produced_protein:>10.2f} {liter:>10.2f} {leftover:>10.2f} {usage_str:>30}"
             )
             lines.append(
-                f"{run_idx:<4} {line_used!s:<6} {finish_date:<12} {finish_day:>10} {exp_date:<12} {produced_protein:>10.2f} {leftover:>10.2f} {usage_str:>30}"
+                f"{run_idx:<4} {line_used!s:<6} {start_date:<12} {finish_date:<12} {finish_day:>10} {exp_date:<12} {produced_protein:>10.2f} {liter:>10.2f} {leftover:>10.2f} {usage_str:>30}"
             )
             lines.append("")
+            
+            Data_Json.append(
+                f"{line_used!s:<6} {start_date:<12} {liter:>10.2f}"
+            )
+            
+            
+            df = pd.DataFrame(Data_Json)
+    print(df)
+            
     return "\n".join(lines)
 
 # --- Aggregated Calendar-Based Inventory Summary ---
@@ -1734,8 +1704,8 @@ def print_aggregated_inventory(final_plan, demand, max_period, products_inventor
         lines.append(header)
         lines.append("-" * len(header))
         for m in range(1, max_period + 1):
-            period_start_date = day_to_date((m - 1) * 30)
-            period_end_date = day_to_date(m * 30 - 1)
+            period_start_date = day_to_date((m - 1) * 30 + 1)
+            period_end_date = day_to_date(m * 30)
             period_label = f"{period_start_date} - {period_end_date}"
             dem_val = int(math.ceil(demand[prod].get(m, 0)))
             np_val = new_prod.get(prod, {}).get(m, 0)
@@ -1979,7 +1949,7 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
 # --- MODIFIED CODE in main() to handle AryoSeven_RC with a separate planner ---
 def main(total_products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein):
     print("run with extended schedule (can start before day 0)...")
-    with open("E:\\Sherkat_DeepSpring_projects\\PharmaAI\\Data\\Lines.json", "r") as f:
+    with open("E:\Sherkat_DeepSpring_projects\Aryogen_Planning\Data\Lines.json", "r") as f:
         data = json.load(f)
     
     base_date = parse_base_date(payload.selectedDate)
