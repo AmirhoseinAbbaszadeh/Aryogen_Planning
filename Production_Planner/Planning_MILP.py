@@ -140,136 +140,6 @@ def _search_dose(prdct: str, x_dose: float) -> float:
     return subset["Protein per container\n(mg)"].iloc[0]
 
 
-# def find_products_batch_sizes(payload: PlanPayload) -> dict[str, List]:
-#     """
-#     Find the batch sizes for each product.
-#     Returns:
-#         products_batches: dictionary with the batch sizes for each product
-#     """
-#     df_parameters = pd.read_excel(
-#         r"E:\Sherkat_DeepSpring_projects\PharmaAI\Data\STD_BatchSize.xlsx"
-#     )
-
-#     products_batch = {}
-#     # Build intervals for each product + dose
-#     for prdct, doses in payload.products.items():
-#         for dose in doses:
-#             fill_name = f"{prdct} {dose} mg"
-#             matched_rows = df_parameters[df_parameters["Filling"] == fill_name]
-#             if matched_rows.empty:
-#                 print(f"No batch-size data found for {fill_name}, skipping.")
-#                 continue
-
-#             row_objects = matched_rows.iloc[0].tolist()
-
-#             def extract_numbers(row_data):
-#                 numbers = []
-#                 for item in row_data:
-#                     if pd.isna(item):
-#                         continue
-#                     found_nums = re.findall(r"(\d+)", str(item))
-#                     numbers.extend(map(int, found_nums))
-#                 return numbers
-
-#             numbers_found = extract_numbers(row_objects)
-#             if len(numbers_found) % 2 == 0:
-#                 new_first = float(f"{numbers_found[0]}.{numbers_found[1]}")
-#                 numbers_found = [new_first] + numbers_found[2:]
-
-#             intervals = []
-#             for i in range(0, len(numbers_found), 2):
-#                 if i + 1 < len(numbers_found):
-#                     intervals.append((numbers_found[i + 1], numbers_found[i + 2]))
-
-#             if not intervals:
-#                 print(f"Warning: Could not form intervals for {fill_name}")
-#                 continue
-
-#             products_batch[fill_name] = intervals
-
-#     return products_batch
-
-# def filling_Gantt_Demands_values(payload: PlanPayload, months: List[str]) -> None:
-#     """
-#     Fill the export and sales values into the Gantt data.
-#     Args:
-#         payload: the payload object
-#         months: list of months (strings)
-#     Raises:
-#         ValueError: if the product is not found in the worksheet
-#     """
-#     products_list = []
-#     demands_list_Export = []
-#     demands_list_Sales = []
-
-#     # Load the workbook and select the QTY sheet
-#     wb = load_workbook("/home/agent/workspace/PharmaAI/Data/1404 Gantt copy 2.xlsx")
-
-#     # Extracting the names of products
-#     for key, values in payload.products.items():
-#         products_list.extend([f"{key} {value}" for value in values])
-
-#     # Iterate through products to fill export and sales values
-#     for prdct in products_list:
-#         words = prdct.split()
-
-#         if prdct == "Arylia 60":
-#             prdct = "Arylia"
-#         if prdct == "Coageight 500":
-#             prdct = "Coageight 500 (a)"
-#         if prdct == "Coageight 1000":
-#             prdct = "Coageight 1000 (d)"
-#         if prdct == "Coageight 2000":
-#             prdct = "Coageight 2000 (b)"
-
-#         # Find product row
-#         product_row = None
-#         for row in wb["QTY"].iter_rows(
-#             min_row=2, max_row=wb["QTY"].max_row, min_col=1, max_col=1
-#         ):
-#             if row[0].value == prdct:
-#                 product_row = row[0].row
-#                 break
-
-#         if not product_row:
-#             raise ValueError(f"Product '{prdct}' not found in the worksheet.")
-
-#         # Fill export stock values
-#         for key, value in payload.Export_Stocks[words[0]][words[1]].items():
-#             demands_list_Export.append(value)
-
-#         # Fill sales stock values
-#         for key, value in payload.Sales_Stocks[words[0]][words[1]].items():
-#             demands_list_Sales.append(value)
-
-#         col_index = {}
-#         for month in months:
-#             for col in range(2, wb["QTY"].max_column + 1):
-#                 cell_value = wb["QTY"].cell(row=1, column=col).value
-#                 if month in str(cell_value) or str(cell_value).startswith(month):
-#                     if month not in col_index:
-#                         col_index[month] = []
-#                     col_index[month].append(col)
-
-#         i = 0
-#         for month in months:
-#             if month in col_index.keys():
-#                 start_col, end_col = col_index[month][0], col_index[month][1]
-#                 for col in range(start_col, end_col + 1):
-#                     if wb["QTY"].cell(row=2, column=col).value == "Export":
-#                         wb["QTY"].cell(row=product_row, column=col).value = demands_list_Export[i]
-#                 for col in range(start_col, end_col + 1):
-#                     if wb["QTY"].cell(row=2, column=col).value == "Sales Forecast":
-#                         wb["QTY"].cell(row=product_row, column=col).value = demands_list_Sales[i]
-#                 i += 1
-
-#         demands_list_Export = []
-#         demands_list_Sales = []
-
-#     wb.save("/home/agent/workspace/PharmaAI/Data/1404 Gantt copy 3.xlsx")
-#     wb.close()
-
-
 def Products_Protein(
     payload: PlanPayload,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
@@ -295,6 +165,9 @@ def Products_Protein(
     products_inventory_protein = {}
     init_stock = {}
     
+    with open("E:\\Sherkat_DeepSpring_projects\\Aryogen_Planning\\Data\\Lines.json", "r") as f:
+        data = json.load(f)
+    
     for stock in payload.currentStocks:
         # if stock is a dict, use stock['productDose'] and stock['amount']
         prod_dose = stock['productDose']  # e.g. "Altebrel|25"
@@ -313,7 +186,8 @@ def Products_Protein(
     export_stock_protein = {}
     products_protein_per_month = {}
     stock_amount = 0
-
+    covers_dict = {}
+    
     # 1) EXPORT side
     for prdct, doses_dict in payload.Export_Stocks.items():
         export_stock_protein.setdefault(prdct, {})
@@ -322,13 +196,14 @@ def Products_Protein(
         for dose_str, month_map in doses_dict.items():
             numeric_dose      = float(dose_str) if "." in dose_str else int(dose_str)
             mg_per_container  = _search_dose(prdct, numeric_dose)
+            export_stock_protein[prdct][f"{numeric_dose}"] = {}
 
             for month, qty in month_map.items():
                 grams = qty * mg_per_container * 0.001
 
                 # accumulate export by month
-                export_stock_protein[prdct].setdefault(month, 0.0)
-                export_stock_protein[prdct][month] += grams
+                export_stock_protein[prdct][f"{numeric_dose}"].setdefault(month, 0.0)
+                export_stock_protein[prdct][f"{numeric_dose}"][month] += grams
 
     # 2) SALES side
     for prdct, doses_dict in payload.Sales_Stocks.items():
@@ -339,12 +214,19 @@ def Products_Protein(
             numeric_dose      = float(dose_str) if "." in dose_str else int(dose_str)
             mg_per_container  = _search_dose(prdct, numeric_dose)
 
+            if f'{prdct} {numeric_dose}' in data['Covers']:
+                covers_dict[f'{prdct} {numeric_dose}'] = data['Covers'][f'{prdct} {numeric_dose}']
+                print(f"Found Covers data for Product '{prdct}' with Dose '{numeric_dose}'. Amount: {covers_dict[f'{prdct} {numeric_dose}']}")
+            else:
+                raise ValueError(f"No row found for Product '{prdct}' with Dose '{numeric_dose}' in Covers data!")
+
+            sales_stock_protein[prdct][f"{numeric_dose}"] = {}
             for month, qty in month_map.items():
                 grams = qty * mg_per_container * 0.001
 
                 # accumulate sales by month
-                sales_stock_protein[prdct].setdefault(month, 0.0)
-                sales_stock_protein[prdct][month] += grams
+                sales_stock_protein[prdct][f"{numeric_dose}"].setdefault(month, 0.0)
+                sales_stock_protein[prdct][f"{numeric_dose}"][month] += grams
 
     # 3) INVENTORY (unchanged)
     for prod_dose, stock_amount in init_stock.items():
@@ -355,12 +237,12 @@ def Products_Protein(
         products_inventory_protein.setdefault(prdct, 0)
         products_inventory_protein[prdct] += int(math.ceil(grams))
     
-
     print("Export Stock Protein:", export_stock_protein)
     print("Sales Stock Protein:", sales_stock_protein)
+    print("covers_dict:", covers_dict)
 
     Schedule = MILP_Solver.main(
-        products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein
+        products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein, covers_dict
     )
     return products_protein_per_month, Schedule
 

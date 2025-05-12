@@ -339,7 +339,7 @@ def build_schedule_with_inventory(
     demand: dict[str, dict],
     products_inventory_protein,
     payload,
-    export_stocks_protein,
+    x,y
 ):
     model = cp_model.CpModel()
 
@@ -1108,13 +1108,27 @@ def build_schedule_with_inventory(
                 <= produced_protein_int[(p, r)]
             )
 
-    # (D) Demand coverage: sum usage across all runs in month m >= demand
-    for p in products:
-        for m in range(1, TOTAL_MONTHS + 1):
-            model.Add(
-                sum(usage[(p, r, m)] for r in range(MAX_RUNS))
-                >= int(math.ceil(demand[p].get(m, 0)))
+    # # (D) Demand coverage: sum usage across all runs in month m >= demand
+    # for p in products:
+    #     for m in range(1, TOTAL_MONTHS + 1):
+    #         model.Add(
+    #             sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+    #             >= int(math.ceil(demand[p].get(m, 0)))
+    #         )
+      
+    for product, month_ranges in demand.items():
+        for m, (min_req, max_req) in month_ranges.items():
+            # sum allocated usage for this product-month over all runs
+            total_allocated = sum(
+                usage[(product, r, m)]
+                for r in range(MAX_RUNS)
             )
+
+            # enforce the minimum
+            model.Add(total_allocated >= min_req)
+
+            # enforce the maximum
+            model.Add(total_allocated <= max_req)
 
     serves = {}  # will index (product,run,month) → Bool
     for p in products:
@@ -1153,6 +1167,13 @@ def build_schedule_with_inventory(
             for m in range(1, TOTAL_MONTHS + 1):
                 model.Add(usage[(p, r, m)] <= bigM * isValid[(p, r, m)])
                 
+    demand_chosen = {}
+    for p in products:
+        for m in range(1, TOTAL_MONTHS+1):
+            demand_chosen[(p, m)] = model.NewIntVar(
+                0, bigM, f"demand_chosen_{p}_{m}"
+            )
+    
     # somewhere after you’ve built `isValid[(p,r,m)]` and `finish_time[(p,r)]`:
     earliness = {}
     for p in products:
@@ -1195,10 +1216,35 @@ def build_schedule_with_inventory(
             )
 
     # Demand is monthly_demand
-    monthly_demand = {}
+    # monthly_demand = {}
+    # for p in products:
+    #     for m in range(1, TOTAL_MONTHS + 1):
+    #         monthly_demand[p, m] = int(math.ceil(demand[p].get(m, 0)))
+    
+    # Build min & max demand dicts instead of a single monthly_demand
+    monthly_demand_min = {}
+    monthly_demand_max = {}
+
     for p in products:
         for m in range(1, TOTAL_MONTHS + 1):
-            monthly_demand[p, m] = int(math.ceil(demand[p].get(m, 0)))
+            # pull from your aggregated ranges:
+            min_req, max_req = demand[p][m]  
+            # ensure they’re integers
+            monthly_demand_min[p, m] = int(min_req)
+            monthly_demand_max[p, m] = int(max_req)
+
+    for p in products:
+        for m in range(1, TOTAL_MONTHS+1):
+            total_usage = sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+            # demand_chosen == total allocated usage
+            model.Add(demand_chosen[(p, m)] == total_usage)
+
+    for p, month_ranges in demand.items():
+        for m, (min_req, max_req) in month_ranges.items():
+            dc = demand_chosen[(p, m)]
+            model.Add(dc >= int(min_req))
+            model.Add(dc <= int(max_req))
+
 
     # 3) INVENTORY FLOW CONSTRAINTS
     # Inv_{p,m} = Inv_{p,m-1} + monthly_prod[p,m] - monthly_demand[p,m]
@@ -1209,27 +1255,46 @@ def build_schedule_with_inventory(
             inventory[(p, m)] = model.NewIntVar(0, bigM, f"inv_{p}_m{m}")
 
     # month 1: start with existing stock + any usage in month 1
-    for p in products:
-        model.Add(
-            inventory[(p, 1)]
-            == products_inventory_protein[p]
-            + sum(usage[(p, r, 1)] for r in range(MAX_RUNS))
-            - int(math.ceil(demand[p].get(1, 0)))
-        )
-        # months 2…TOTAL_MONTHS
-        for m in range(2, TOTAL_MONTHS+1):
-            model.Add(
-                inventory[(p, m)]
-                == inventory[(p, m-1)]
-                + sum(usage[(p, r, m)] for r in range(MAX_RUNS))
-                - int(math.ceil(demand[p].get(m, 0)))
-            )
-        # inventory can never go negative
-        for m in range(1, TOTAL_MONTHS+1):
-            # model.Add(inventory[(p, m)] >= abs(int((monthly_demand[p, m] - export_stocks_protein[p][m]) // 3)))
-            model.Add(inventory[(p, m)] >= 0)
+    # for p in products:
+    #     model.Add(
+    #         inventory[(p, 1)]
+    #         == products_inventory_protein[p]
+    #         + sum(usage[(p, r, 1)] for r in range(MAX_RUNS))
+    #         - int(math.ceil(demand[p].get(1, 0)))
+    #     )
+    #     # months 2…TOTAL_MONTHS
+    #     for m in range(2, TOTAL_MONTHS+1):
+    #         model.Add(
+    #             inventory[(p, m)]
+    #             == inventory[(p, m-1)]
+    #             + sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+    #             - int(math.ceil(demand[p].get(m, 0)))
+    #         )
+    #     # inventory can never go negative
+    #     for m in range(1, TOTAL_MONTHS+1):
+    #         # model.Add(inventory[(p, m)] >= abs(int((monthly_demand[p, m] - export_stocks_protein[p][m]) // 3)))
+    #         model.Add(inventory[(p, m)] >= 0)
 
-    
+
+
+
+    # Month 1
+    model.Add(
+        inventory[(p, 1)]
+        == products_inventory_protein[p]
+        + sum(usage[(p, r, 1)] for r in range(MAX_RUNS))
+        - demand_chosen[(p, 1)]
+    )
+
+    # Months 2…TOTAL_MONTHS
+    for m in range(2, TOTAL_MONTHS+1):
+        model.Add(
+            inventory[(p, m)]
+            == inventory[(p, m-1)]
+            + sum(usage[(p, r, m)] for r in range(MAX_RUNS))
+            - demand_chosen[(p, m)]
+        )
+
     # 1) sum up all earliness…
     total_earliness = model.NewIntVar(0, MAX_RUNS * DAYS_PER_MONTH * len(earliness), "total_earliness")
     model.Add(total_earliness == sum(earliness.values()))
@@ -1241,6 +1306,16 @@ def build_schedule_with_inventory(
         for l in product_lines[p]
     }
 
+    # after you've created demand_chosen[(p,m)]
+    shortfall = {}
+    for p, month_ranges in demand.items():
+        for m, (_, max_req) in month_ranges.items():
+            # max shortfall is max_req
+            sc = model.NewIntVar(0, max_req, f"shortfall_{p}_{m}")
+            shortfall[(p, m)] = sc
+            # shortfall = max_req - demand_chosen
+            model.Add(sc == max_req - demand_chosen[(p, m)])
+            
     # build a linear expression for “total run capacity”:
     cap_penalty = []
     for p in products:
@@ -1252,23 +1327,27 @@ def build_schedule_with_inventory(
 
     # e.g. α=1000 to give primary weight to earliness, β=1 to break ties by fewer runs
     a = 3
-    # b = 2
+    b = 2
     c = 2 # tiny weight compared to your a/b
 
+    total_shortfall = sum(shortfall.values())
     model.Minimize(
         # b*sum(activate_run.values()) +
-        a*total_earliness +
-        c*sum(cap_penalty)
+        b * total_shortfall +
+        a*total_earliness
+        # c*sum(cap_penalty)
     )
 
     # Solve
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 400
+    solver.parameters.max_time_in_seconds = 1000
     solver.parameters.cp_model_presolve = True  # Enable fast presolving to reduce model size
     solver.parameters.cp_model_probing_level = 2    # 0=off, 1=light, 2=strengthened
     solver.parameters.symmetry_level = 3  # Enables symmetry breaking during preprocessing
     solver.parameters.log_search_progress = True
     solver.parameters.num_search_workers = 6
+    # solver.parameters.keep_all_feasible_solutions_in_presolve = True
+
     # solver.parameters.stop_after_first_solution = True
     
     status = solver.Solve(model)
@@ -1283,7 +1362,7 @@ def build_schedule_with_inventory(
             # Retrieve the value assigned by the solver to the inventory variable for product p in month m.
             inv_value = solver.Value(inventory[(p, m)])
             inventory_solution[p][m] = inv_value
-            print(f"Product: {p}, Month: {m}, Inventory: {inv_value}, production: {solver.Value(monthly_prod[(p, m)])}, demand: {monthly_demand[p, m]}")
+            # print(f"Product: {p}, Month: {m}, Inventory: {inv_value}, production: {solver.Value(monthly_prod[(p, m)])}, demand: {solver.Value(demand_chosen[(p, m)])}")
             
     # 7) Build final plan (updated for partial usage / Scenario B)
     final_plan = []
@@ -1476,10 +1555,12 @@ def build_schedule_with_inventory(
 
     # Instead of reading the model’s inventory variables (which might be driven to 0)
     # we compute the cumulative inventory from the solved usage values.
+    Demand = {}
     inv_traj: dict[str, dict[int, int]] = {}
     product_initial_stock = {}
     for p in products:
         inv_traj[p] = {}
+        Demand[p] = {}
         # Instead of 0, set current_inv to the existing stock for p
         # e.g. if your existing stock is stored in a dict existing_stock[p]
         # or if you store it as inventory_month0 in the solver, you can read that value here.
@@ -1492,14 +1573,16 @@ def build_schedule_with_inventory(
             monthly_production = sum(
                 solver.Value(usage[(p, r, m)]) for r in range(MAX_RUNS)
             )
-            monthly_demand = int(math.ceil(demand[p].get(m, 0)))
+            monthly_demand = int(math.ceil(solver.Value(demand_chosen[(p,m)])))
+            
             # Cumulatively update inventory:
             # current_inv = previous_inv + production in m - demand in m
             current_inv = current_inv + monthly_production - monthly_demand
             inv_traj[p][m] = current_inv
+            Demand[p][m] = monthly_demand
     print("Inventory Start => ",inv_traj)
 
-    return final_plan, inv_traj, product_initial_stock
+    return final_plan, inv_traj, product_initial_stock, Demand
 
 def compute_monthly_demand_differences(original_demand: dict[str, dict], model_capacity: dict[str, dict[int, int]]) -> dict[str, dict[int, int]]:
     """
@@ -1947,7 +2030,7 @@ def Output_Printers(final_plan: list[dict], inv_traj: dict[str, dict], demand, p
     return front_payload, lines, lines_detail
 
 # --- MODIFIED CODE in main() to handle AryoSeven_RC with a separate planner ---
-def main(total_products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein):
+def main(total_products_protein_per_month, products_inventory_protein, payload, export_stock_protein, sales_stock_protein, covers_dict):
     print("run with extended schedule (can start before day 0)...")
     with open("E:\Sherkat_DeepSpring_projects\Aryogen_Planning\Data\Lines.json", "r") as f:
         data = json.load(f)
@@ -1958,57 +2041,44 @@ def main(total_products_protein_per_month, products_inventory_protein, payload, 
 
     demand_Export: dict[str, dict[int, float]] = {}
     demand_Sales:  dict[str, dict[int, float]] = {}
+    stock_ranges: dict[str, dict[str, dict[int, dict[str, float]]]] = {}
+    aggregated: dict[str, dict[int, tuple[int, int]]] = {}
 
-    # EXPORT
-    for prdct, month_map in export_stock_protein.items():
-        for m, grams in month_map.items():
-            demand_Export.setdefault(prdct, {}).setdefault(m, 0.0)
-            demand_Export[prdct][m] += grams
 
-    # SALES
-    for prdct, month_map in sales_stock_protein.items():
-        for m, grams in month_map.items():
-            demand_Sales.setdefault(prdct, {}).setdefault(m, 0.0)
-            demand_Sales[prdct][m] += grams
+    for product, doses in sales_stock_protein.items():
+        stock_ranges[product] = {}
+        for dose, monthly_sales in doses.items():
+            key = f"{product} {dose}"
+            min_mult, max_mult = covers_dict.get(key, (1.0, 1.0))
+            stock_ranges[product][dose] = {}
 
-    print("Demand dict before distribution:\n", demand_Sales)
-    print("Export dict before distribution:\n", demand_Export)
-
-    products = []
-    # For demonstration, let's keep the logic that redistributes total demand_Sales equally across 12 months
-    for product, monthly_demand in demand_Sales.items():
-        products.append(product)
-        for mm in range(1, TOTAL_MONTHS + 1):
-            demand_Sales[product][mm] = (3 * demand_Sales[product][mm])
-            demand_Sales[product][mm] += demand_Export.get(product, {}).get(mm, 0.0) 
-    print("Demand dict after distribution:\n", demand_Sales)
-            
-    # Initialize a dictionary to track stock usage for each product and month
-    stock_usage = {}  
-    for p in products:
-        stock_usage[p] = {}  # Initialize stock usage tracking for each product
-
-        initial_stock_inventory = products_inventory_protein.get(p, 0)  # The initial stock for the product
-        
-        # Loop through each month to match stock usage with demand
-        for m in range(1, TOTAL_MONTHS + 1):
-            if initial_stock_inventory > 0:
-                # If there is still initial stock available, use it to fulfill the demand
-                demand_for_month = math.ceil(demand_Sales[p].get(m, 0))  # Get the demand for the month
-                stock_used = min(initial_stock_inventory, demand_for_month)  # Use as much stock as possible to fulfill the demand
-                stock_usage[p][m] = stock_used  # Track how much stock was used in this month
+            for month, sales in monthly_sales.items():
+                demand_min = float(sales) * min_mult
+                demand_max = float(sales) * max_mult
+                export_qty = float(export_stock_protein[product][dose].get(month, 0.0))
+                stock_ranges[product][dose][month] = [
+                    math.ceil(export_qty + demand_min),
+                    math.ceil(export_qty + demand_max)
+                ]
                 
-                if stock_usage[p][m] == demand_for_month:
-                    demand_Sales[p][m] = 0  # If the demand is fully met, set it to 0
-                elif stock_usage[p][m] < demand_for_month:
-                    demand_Sales[p][m] -= stock_used
-                    products_inventory_protein[p] = 0
-                
-                initial_stock_inventory -= stock_used  # Decrease the available stock
-            else:
-                pass
+    for product, doses in stock_ranges.items():
+        monthly_totals: dict[int, list[int]] = {}
 
+        for dose_ranges in doses.values():
+            for month, (low, high) in dose_ranges.items():
+                if month not in monthly_totals:
+                    monthly_totals[month] = [0, 0]
+                monthly_totals[month][0] += low
+                monthly_totals[month][1] += high
+
+        aggregated[product] = {
+            month: (totals[0], totals[1])
+            for month, totals in monthly_totals.items()
+        }
+    print("Demand dict after distribution:\n", aggregated)
     
+    
+            
     # If AryoSeven_RC is in the demand, call the specialized planner
     final_plan_RC, inv_traj_RC = [], {}
     if "AryoSeven_RC" in demand_Sales:
@@ -2019,8 +2089,8 @@ def main(total_products_protein_per_month, products_inventory_protein, payload, 
         del demand_Sales["AryoSeven_RC"]
 
     # The rest of products (including AryoSeven_BR) go through the normal build_schedule_with_inventory
-    final_plan, inv_traj, initial_stock = build_schedule_with_inventory(data, demand_Sales, products_inventory_protein, payload, demand_Export)
-
+    final_plan, inv_traj, initial_stock, Demand = build_schedule_with_inventory(data, aggregated, products_inventory_protein, payload, demand_Export, stock_ranges)
+    
     if not final_plan:
         print(
             "No feasible total plan found with extended schedule. Possibly no runs were activated."
@@ -2038,7 +2108,7 @@ def main(total_products_protein_per_month, products_inventory_protein, payload, 
         inv_traj[k] = v
 
     
-    front_payload, lines, lines_detail = Output_Printers(combined_plan, inv_traj, demand_Sales, products_inventory_protein)
+    front_payload, lines, lines_detail = Output_Printers(combined_plan, inv_traj, Demand, products_inventory_protein)
     # or build your final payload from combined results
     
     # Create a payload to return
